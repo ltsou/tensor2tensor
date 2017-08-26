@@ -70,7 +70,7 @@ class SymbolModality(modality.Modality):
       ret = shards[0]
     else:
       ret = tf.concat(shards, 0)
-    ret = eu.ConvertGradientToTensor(ret)
+    ret = eu.convert_gradient_to_tensor(ret)
     return ret
 
   def bottom_simple(self, x, name, reuse):
@@ -112,12 +112,18 @@ class SymbolModality(modality.Modality):
       reuse = False
     with tf.variable_scope(scope_name, reuse=reuse):
       var = self._get_weights()
-      shape = tf.shape(body_output)[:-1]
-      body_output = tf.reshape(body_output, [-1, self._body_input_depth])
-      logits = tf.matmul(body_output, var, transpose_b=True)
-      logits = tf.reshape(logits, tf.concat([shape, [self._vocab_size]], 0))
-      # insert a channels dimension
-      return tf.expand_dims(logits, 3)
+      if (self._model_hparams.factored_logits and
+          self._model_hparams.mode == tf.contrib.learn.ModeKeys.TRAIN):
+        # insert channels dimension
+        body_output = tf.expand_dims(body_output, 3)
+        logits = common_layers.FactoredTensor(body_output, var)
+      else:
+        shape = tf.shape(body_output)[:-1]
+        body_output = tf.reshape(body_output, [-1, self._body_input_depth])
+        logits = tf.matmul(body_output, var, transpose_b=True)
+        logits = tf.reshape(
+            logits, tf.concat([shape, [1, self._vocab_size]], 0))
+      return logits
 
 
 @registry.register_image_modality
@@ -406,10 +412,11 @@ class ClassLabelModality(modality.Modality):
       # Assume input is a square with self._body_input_depth channels.
       if self._is_2d:
         length_float = tf.to_float(tf.shape(x)[1])
+        length_float *= tf.to_float(tf.shape(x)[2])
         spatial_dim_float = tf.sqrt(length_float)
         spatial_dim = tf.to_int32(spatial_dim_float)
-        x = tf.reshape(x,
-                       [-1, spatial_dim, spatial_dim, self._body_input_depth])
+        x_depth = int(x.get_shape()[3])
+        x = tf.reshape(x, [-1, spatial_dim, spatial_dim, x_depth])
       x = common_layers.conv_block_downsample(x, self._kernel, self._strides,
                                               self._padding)
       x = tf.nn.relu(x)
@@ -438,6 +445,7 @@ class ClassLabel1DModality(ClassLabelModality):
 @registry.register_image_modality("identity")
 @registry.register_symbol_modality("identity")
 @registry.register_class_label_modality("identity")
+@registry.register_real_modality("identity")
 class IdentityModality(modality.Modality):
   """Does nothing."""
 
@@ -452,9 +460,12 @@ class IdentityModality(modality.Modality):
     return body_output
 
 
-@registry.register_generic_modality("real")
 class RealModality(modality.Modality):
-  """Modality for real (i.e. float) vectors."""
+  """Base class for real (i.e. float) vectors.
+
+  * Bottom is a linear projection layer to hparams.hidden_size.
+  * Top is a linear projection layer to vocab_size.
+  """
 
   def bottom(self, x):
     with tf.variable_scope("real"):
@@ -464,7 +475,16 @@ class RealModality(modality.Modality):
     with tf.variable_scope("real"):
       return tf.layers.dense(body_output, self._vocab_size)
 
-  def loss(self, top_out, targets, weights_fn=common_layers.weights_nonzero):
+  def loss(self, top_out, targets, weights_fn=common_layers.weights_all):
+    raise NotImplementedError()
+
+
+@registry.register_real_modality("default")
+@registry.register_real_modality("l2_loss")
+class RealL2LossModality(RealModality):
+  """Modality for real (i.e. float) vectors with L2 (Gaussian) loss."""
+
+  def loss(self, top_out, targets, weights_fn=common_layers.weights_all):
     predictions = top_out
     with tf.name_scope("l2"):
       weights = weights_fn(targets)
@@ -472,9 +492,33 @@ class RealModality(modality.Modality):
       return tf.reduce_sum(l2 * weights), tf.reduce_sum(weights)
 
 
+@registry.register_real_modality("log_poisson_loss")
+class RealLogPoissonLossModality(RealL2LossModality):
+  """Modality for real (i.e. float) vectors with log Poisson regression loss.
+
+  * Top is a linear projection to vocab size followed by a softplus
+    transform (log(exp(features) + 1)).
+  """
+
+  def top(self, body_output, _):
+    with tf.variable_scope("real"):
+      return tf.nn.softplus(tf.layers.dense(body_output, self._vocab_size))
+
+  def loss(self, top_out, targets, weights_fn=common_layers.weights_all):
+    predictions = top_out
+    with tf.name_scope("log_possion"):
+      weights = weights_fn(targets)
+      lp_loss = tf.nn.log_poisson_loss(targets, predictions)
+      return tf.reduce_sum(lp_loss * weights), tf.reduce_sum(weights)
+
+
 @registry.register_image_modality("identity_no_pad")
 class IdentityModalityNoPad(modality.Modality):
   """Does nothing except making sure that there is no padding in cross-ent."""
+
+  @property
+  def top_dimensionality(self):
+    return 256
 
   @property
   def targets_dimensionality(self):

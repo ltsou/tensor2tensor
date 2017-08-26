@@ -105,7 +105,7 @@ class PTBProblem(problem.Text2TextProblem):
   def targeted_vocab_size(self):
     return 10000
 
-  def train_generator(self, data_dir, tmp_dir, train):
+  def generator(self, data_dir, tmp_dir, train):
     filename = os.path.basename(PTB_URL)
     compressed_filepath = generator_utils.maybe_download(
         tmp_dir, filename, PTB_URL)
@@ -157,8 +157,8 @@ class PTBProblem(problem.Text2TextProblem):
           yield {"inputs": [0], "targets": tok}
 
 
-@registry.register_problem("lm_ptb_10k")
-class LmPtb10k(PTBProblem):
+@registry.register_problem
+class LanguagemodelPtb10k(PTBProblem):
   """A class for generating PTB data, 10k vocab."""
 
   @property
@@ -167,7 +167,7 @@ class LmPtb10k(PTBProblem):
 
 
 @registry.register_problem
-class LmPtbCharacters(PTBProblem):
+class LanguagemodelPtbCharacters(PTBProblem):
   """A class for generating PTB data, character-level."""
 
   @property

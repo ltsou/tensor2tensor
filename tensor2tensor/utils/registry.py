@@ -44,7 +44,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import collections
 import inspect
 import re
 
@@ -64,6 +63,7 @@ class Modalities(object):
   AUDIO = "audio"
   CLASS_LABEL = "class_label"
   GENERIC = "generic"
+  REAL = "real"
 
 
 _MODALITIES = {
@@ -72,6 +72,7 @@ _MODALITIES = {
     Modalities.AUDIO: {},
     Modalities.CLASS_LABEL: {},
     Modalities.GENERIC: {},
+    Modalities.REAL: {},
 }
 
 # Camel case to snake case utils
@@ -89,8 +90,30 @@ def _reset():
     ctr.clear()
 
 
-def _default_name(obj):
-  return _convert_camel_to_snake(obj.__name__)
+def _default_name(obj_class):
+  """Convert a class name to the registry's default name for the class.
+
+  Args:
+    obj_class: the name of a class
+
+  Returns:
+    The registry's default name for the class.
+  """
+
+  return _convert_camel_to_snake(obj_class.__name__)
+
+
+def default_object_name(obj):
+  """Convert an object to the registry's default name for the object class.
+
+  Args:
+    obj: an object instance
+
+  Returns:
+    The registry's default name for the class of the object.
+  """
+
+  return _default_name(obj.__class__)
 
 
 def register_model(name=None):
@@ -223,10 +246,10 @@ def problem(name):
       was_copy: A boolean.
     """
     # Recursively strip tags until we reach a base name.
-    if len(problem_name) > 4 and problem_name[-4:] == "_rev":
+    if problem_name.endswith("_rev"):
       base, _, was_copy = parse_problem_name(problem_name[:-4])
       return base, True, was_copy
-    elif len(problem_name) > 5 and problem_name[-5:] == "_copy":
+    elif problem_name.endswith("_copy"):
       base, was_reversed, _ = parse_problem_name(problem_name[:-5])
       return base, was_reversed, True
     else:
@@ -277,6 +300,11 @@ def class_label_modality(name=None):
                                 Modalities.CLASS_LABEL.capitalize())
 
 
+def real_modality(name=None):
+  return _internal_get_modality(name, _MODALITIES[Modalities.REAL],
+                                Modalities.REAL.capitalize())
+
+
 def _internal_register_modality(name, mod_collection, collection_str):
   """Register a modality into mod_collection."""
 
@@ -307,6 +335,12 @@ def register_generic_modality(name=None):
   """Register a generic modality. name defaults to class name snake-cased."""
   return _internal_register_modality(name, _MODALITIES[Modalities.GENERIC],
                                      Modalities.GENERIC.capitalize())
+
+
+def register_real_modality(name=None):
+  """Register a real modality. name defaults to class name snake-cased."""
+  return _internal_register_modality(name, _MODALITIES[Modalities.REAL],
+                                     Modalities.REAL.capitalize())
 
 
 def register_audio_modality(name=None):
@@ -366,6 +400,7 @@ def create_modality(modality_spec, model_hparams):
       Modalities.IMAGE: image_modality,
       Modalities.CLASS_LABEL: class_label_modality,
       Modalities.GENERIC: generic_modality,
+      Modalities.REAL: real_modality,
   }
 
   modality_full_name, vocab_size = modality_spec
@@ -377,17 +412,18 @@ def create_modality(modality_spec, model_hparams):
   return retrieval_fns[modality_type](modality_name)(model_hparams, vocab_size)
 
 
-def _hparams_help_string():
-  hparams_names = list_hparams()
-  prefixes = zip([name.split("_")[0] for name in hparams_names], hparams_names)
-  names_by_prefix = collections.defaultdict(list)
-  for (prefix, full_name) in prefixes:
-    names_by_prefix[prefix].append(full_name)
-  return "\n".join(
-      sorted([
-          "    * %s: %s" % (prefix, sorted(names))
-          for prefix, names in six.iteritems(names_by_prefix)
-      ]))
+def display_list_by_prefix(names_list, starting_spaces=0):
+  """Creates a help string for names_list grouped by prefix."""
+  cur_prefix, result_lines = None, []
+  space = " " * starting_spaces
+  for name in sorted(names_list):
+    split = name.split("_", 1)
+    prefix = split[0]
+    if cur_prefix != prefix:
+      result_lines.append(space + prefix + ":")
+      cur_prefix = prefix
+    result_lines.append(space + "  * " + name)
+  return "\n".join(result_lines)
 
 
 def help_string():
@@ -396,24 +432,29 @@ def help_string():
 Registry contents:
 ------------------
 
-  Models: %s
-
-  HParams (by model):
+  Models:
 %s
 
-  RangedHParams: %s
+  HParams:
+%s
 
-  Modalities: %s
+  RangedHParams:
+%s
 
-  Problems: %s
+  Modalities:
+%s
+
+  Problems:
+%s
   """
-  m, rhp, mod, probs = [
-      sorted(entries)
+  m, hp, rhp, mod, probs = [
+      display_list_by_prefix(entries, starting_spaces=4)
       for entries in [
           list_models(),
+          list_hparams(),
           list_ranged_hparams(),
           list_modalities(),
           list_problems()
       ]
   ]
-  return help_str % (m, _hparams_help_string(), rhp, mod, probs)
+  return help_str % (m, hp, rhp, mod, probs)

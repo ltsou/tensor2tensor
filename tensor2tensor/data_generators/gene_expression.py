@@ -35,7 +35,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import itertools
 import math
 import multiprocessing as mp
 import os
@@ -47,6 +46,7 @@ import numpy as np
 
 from six.moves import xrange  # pylint: disable=redefined-builtin
 
+from tensor2tensor.data_generators import dna_encoder
 from tensor2tensor.data_generators import generator_utils
 from tensor2tensor.data_generators import problem
 from tensor2tensor.data_generators import text_encoder
@@ -56,7 +56,6 @@ from tensor2tensor.utils import registry
 import tensorflow as tf
 
 MAX_CONCURRENT_PROCESSES = 10
-_bases = list("ACTG")
 
 
 class GeneExpressionProblem(problem.Problem):
@@ -82,7 +81,7 @@ class GeneExpressionProblem(problem.Problem):
   def feature_encoders(self, data_dir):
     del data_dir
     return {
-        "inputs": DNAEncoder(chunk_size=self.chunk_size),
+        "inputs": dna_encoder.DNAEncoder(chunk_size=self.chunk_size),
         # TODO(rsepassi): RealEncoder?
         "targets": text_encoder.TextEncoder()
     }
@@ -110,10 +109,10 @@ class GeneExpressionProblem(problem.Problem):
     # Collect created shard processes to start and join
     processes = []
 
-    datasets = [
-        (self.training_filepaths, self.num_shards, "train", num_train_examples),
-        (self.dev_filepaths, 10, "valid", num_dev_examples),
-        (self.test_filepaths, 10, "test", num_test_examples)]
+    datasets = [(self.training_filepaths, self.num_shards, "train",
+                 num_train_examples), (self.dev_filepaths, 10, "valid",
+                                       num_dev_examples),
+                (self.test_filepaths, 10, "test", num_test_examples)]
     for fname_fn, nshards, key_prefix, num_examples in datasets:
       outfiles = fname_fn(data_dir, nshards, shuffled=False)
       all_filepaths.extend(outfiles)
@@ -147,17 +146,14 @@ class GeneExpressionProblem(problem.Problem):
     p = defaults
     vocab_size = self._encoders["inputs"].vocab_size
     p.input_modality = {"inputs": (registry.Modalities.SYMBOL, vocab_size)}
-    p.target_modality = ("%s:real" % registry.Modalities.GENERIC,
+    p.target_modality = ("%s:log_poisson_loss" % registry.Modalities.REAL,
                          self.num_output_predictions)
     p.input_space_id = problem.SpaceID.DNA
     p.target_space_id = problem.SpaceID.REAL
 
   def example_reading_spec(self):
-    # TODO(rsepassi): propagate and apply targets_mask to output RealModality
-    # and to eval metrics (weights_fn?).
     data_fields = {
         "inputs": tf.VarLenFeature(tf.int64),
-        "targets_mask": tf.VarLenFeature(tf.float32),
         "targets": tf.VarLenFeature(tf.float32),
     }
     data_items_to_decoders = None
@@ -167,24 +163,21 @@ class GeneExpressionProblem(problem.Problem):
     del mode
     del hparams
 
-    # Reshape targets
+    # Reshape targets to contain num_output_predictions per output timestep
     examples["targets"] = tf.reshape(examples["targets"],
-                                     [-1, self.num_output_predictions])
-    examples["targets_mask"] = tf.reshape(examples["targets_mask"], [-1, 1])
-
-    # Set masked targets to 0 (i.e. pad) so that loss and metrics ignore them.
-    # Add epsilon because some unmasked labels are actually 0.
-    examples["targets"] += 1e-6
-    examples["targets"] *= examples["targets_mask"]
+                                     [-1, 1, self.num_output_predictions])
+    # Slice off EOS - not needed, and messes up the GeneExpressionConv model
+    # which expects the input length to be a multiple of the target length.
+    examples["inputs"] = examples["inputs"][:-1]
 
     return examples
 
   def eval_metrics(self):
-    return [metrics.Metrics.RMSE]
+    return [metrics.Metrics.LOG_POISSON, metrics.Metrics.R2]
 
 
-@registry.register_problem("gene_expression_cage10")
-class GeneExpressionCAGE10(GeneExpressionProblem):
+@registry.register_problem
+class GenomicsExpressionCage10(GeneExpressionProblem):
 
   @property
   def download_url(self):
@@ -195,8 +188,8 @@ class GeneExpressionCAGE10(GeneExpressionProblem):
     return "cage10.h5"
 
 
-@registry.register_problem("gene_expression_gm12878")
-class GeneExpressionGM12878(GeneExpressionProblem):
+@registry.register_problem
+class GenomicsExpressionGm12878(GeneExpressionProblem):
 
   @property
   def download_url(self):
@@ -207,8 +200,8 @@ class GeneExpressionGM12878(GeneExpressionProblem):
     return "gm12878.h5"
 
 
-@registry.register_problem("gene_expression_l262k")
-class GeneExpressionL262k(GeneExpressionProblem):
+@registry.register_problem
+class GenomicsExpressionL262k(GeneExpressionProblem):
 
   @property
   def h5_file(self):
@@ -244,7 +237,7 @@ def dataset_generator(filepath,
                       chunk_size=1,
                       start_idx=None,
                       end_idx=None):
-  encoder = DNAEncoder(chunk_size=chunk_size)
+  encoder = dna_encoder.DNAEncoder(chunk_size=chunk_size)
   with h5py.File(filepath, "r") as h5_file:
     # Get input keys from h5_file
     src_keys = [s % dataset for s in ["%s_in", "%s_na", "%s_out"]]
@@ -261,7 +254,12 @@ def dataset_generator(filepath,
       if i % 100 == 0:
         print("Generating example %d for %s" % (i, dataset))
       inputs, mask, outputs = inp_data[i], mask_data[i], out_data[i]
-      yield to_example_dict(encoder, inputs, mask, outputs)
+      ex_dict = to_example_dict(encoder, inputs, mask, outputs)
+      # Original data has one output for every 128 input bases. Ensure that the
+      # ratio has been maintained given the chunk size and removing EOS.
+      assert (len(ex_dict["inputs"]) - 1) == ((
+          128 // chunk_size) * ex_dict["targets_shape"][0])
+      yield ex_dict
 
 
 def to_example_dict(encoder, inputs, mask, outputs):
@@ -278,7 +276,7 @@ def to_example_dict(encoder, inputs, mask, outputs):
     while idx != last_idx + 1:
       bases.append(encoder.UNK)
       last_idx += 1
-    bases.append(_bases[base_id])
+    bases.append(encoder.BASES[base_id])
     last_idx = idx
   assert len(inputs) == len(bases)
 
@@ -297,62 +295,3 @@ def to_example_dict(encoder, inputs, mask, outputs):
   ex_dict = dict(
       zip(example_keys, [input_ids, targets_mask, targets, targets_shape]))
   return ex_dict
-
-
-class DNAEncoder(text_encoder.TextEncoder):
-  """ACTG strings to ints and back. Optionally chunks bases into single ids.
-
-  Uses 'X' as an unknown base.
-  """
-  UNK = "X"
-  PAD = "0"
-
-  def __init__(self,
-               chunk_size=1,
-               num_reserved_ids=text_encoder.NUM_RESERVED_TOKENS):
-    super(DNAEncoder, self).__init__(num_reserved_ids=num_reserved_ids)
-    # Build a vocabulary of chunks of size chunk_size
-    self._chunk_size = chunk_size
-    chunks = []
-    for size in range(1, chunk_size + 1):
-      c = itertools.product(_bases + [DNAEncoder.UNK], repeat=size)
-      num_pad = chunk_size - size
-      padding = (DNAEncoder.PAD,) * num_pad
-      c = [el + padding for el in c]
-      chunks.extend(c)
-    chunks.sort()
-    ids = range(self._num_reserved_ids, len(chunks) + self._num_reserved_ids)
-    self._ids_to_chunk = dict(zip(ids, chunks))
-    self._chunks_to_ids = dict(zip(chunks, ids))
-
-  @property
-  def vocab_size(self):
-    return len(self._ids_to_chunk) + self._num_reserved_ids
-
-  def encode(self, s):
-    bases = list(s)
-    pad = [DNAEncoder.PAD] * (len(bases) % self._chunk_size)
-    bases.extend(pad)
-    assert (len(bases) % self._chunk_size) == 0
-    num_chunks = len(bases) // self._chunk_size
-    ids = []
-    for chunk_idx in xrange(num_chunks):
-      start_idx = chunk_idx * self._chunk_size
-      end_idx = start_idx + self._chunk_size
-      chunk = tuple(bases[start_idx:end_idx])
-      if chunk not in self._chunks_to_ids:
-        raise ValueError("Unrecognized chunk %s" % chunk)
-      ids.append(self._chunks_to_ids[chunk])
-    return ids
-
-  def decode(self, ids):
-    bases = []
-    for idx in ids:
-      if idx >= self._num_reserved_ids:
-        chunk = self._ids_to_chunk[idx]
-        if DNAEncoder.PAD in chunk:
-          chunk = chunk[:chunk.index(DNAEncoder.PAD)]
-      else:
-        chunk = [text_encoder.RESERVED_TOKENS[idx]]
-      bases.extend(chunk)
-    return "".join(bases)

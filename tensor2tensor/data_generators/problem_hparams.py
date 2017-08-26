@@ -345,19 +345,6 @@ def lm1b_characters(unused_model_hparams):
   return p
 
 
-def wiki_32k(model_hparams):
-  """Wikipedia title to article.  32k subtoken vocabulary."""
-  p = default_problem_hparams()
-  encoder = text_encoder.SubwordTextEncoder(
-      os.path.join(model_hparams.data_dir, "wiki_32k.subword_text_encoder"))
-  modality_spec = (registry.Modalities.SYMBOL, encoder.vocab_size)
-  p.input_modality = {"inputs": modality_spec}
-  p.target_modality = modality_spec
-  p.vocabulary = {"inputs": encoder, "targets": encoder}
-  p.target_space_id = 3
-  return p
-
-
 def wmt_ende_bpe32k(model_hparams):
   """English to German translation benchmark."""
   p = default_problem_hparams()
@@ -462,56 +449,11 @@ def wsj_parsing_tokens(model_hparams, prefix, wrong_source_vocab_size,
   return p
 
 
-def ice_parsing_tokens(model_hparams, wrong_source_vocab_size):
-  """Icelandic to parse tree translation benchmark.
-
-  Args:
-    model_hparams: a tf.contrib.training.HParams
-    wrong_source_vocab_size: a number used in the filename indicating the
-      approximate vocabulary size.  This is not to be confused with the actual
-      vocabulary size.
-
-  Returns:
-    A tf.contrib.training.HParams object.
-  """
-  p = default_problem_hparams()
-  # This vocab file must be present within the data directory.
-  source_vocab_filename = os.path.join(
-      model_hparams.data_dir, "ice_source.vocab.%d" % wrong_source_vocab_size)
-  target_vocab_filename = os.path.join(model_hparams.data_dir,
-                                       "ice_target.vocab.256")
-  source_subtokenizer = text_encoder.SubwordTextEncoder(source_vocab_filename)
-  target_subtokenizer = text_encoder.SubwordTextEncoder(target_vocab_filename)
-  p.input_modality = {
-      "inputs": (registry.Modalities.SYMBOL, source_subtokenizer.vocab_size)
-  }
-  p.target_modality = (registry.Modalities.SYMBOL, 256)
-  p.vocabulary = {
-      "inputs": source_subtokenizer,
-      "targets": target_subtokenizer,
-  }
-  p.input_space_id = 18  # Icelandic tokens
-  p.target_space_id = 19  # Icelandic parse tokens
-  return p
-
-
 def img2img_imagenet(unused_model_hparams):
   """Image 2 Image for imagenet dataset."""
   p = default_problem_hparams()
   p.input_modality = {"inputs": ("image:identity", None)}
   p.target_modality = ("image:identity", None)
-  p.batch_size_multiplier = 256
-  p.max_expected_batch_size_per_shard = 4
-  p.input_space_id = 1
-  p.target_space_id = 1
-  return p
-
-
-def image_celeba(unused_model_hparams):
-  """Image CelebA dataset."""
-  p = default_problem_hparams()
-  p.input_modality = {"inputs": ("image:identity_no_pad", None)}
-  p.target_modality = ("image:identity_no_pad", None)
   p.batch_size_multiplier = 256
   p.max_expected_batch_size_per_shard = 4
   p.input_space_id = 1
@@ -538,25 +480,17 @@ PROBLEM_HPARAMS_MAP = {
         lambda p: audio_wsj_tokens(p, 2**13),
     "audio_wsj_tokens_8k_test":
         lambda p: audio_wsj_tokens(p, 2**13),
-    "lm1b_characters":
+    "languagemodel_1b_characters":
         lm1b_characters,
-    "lm1b_32k":
+    "languagemodel_1b32k":
         lm1b_32k,
-    "wiki_32k":
-        wiki_32k,
-    "ice_parsing_characters":
-        wmt_parsing_characters,
-    "ice_parsing_tokens":
-        lambda p: ice_parsing_tokens(p, 2**13),
-    "wmt_parsing_tokens_8k":
+    "parsing_english_ptb8k":
         lambda p: wmt_parsing_tokens(p, 2**13),
-    "wsj_parsing_tokens_16k":
+    "parsing_english_ptb16k":
         lambda p: wsj_parsing_tokens(  # pylint: disable=g-long-lambda
             p, "wsj", 2**14, 2**9),
-    "wmt_ende_bpe32k":
+    "translate_ende_wmt_bpe32k":
         wmt_ende_bpe32k,
-    "image_celeba_tune":
-        image_celeba,
     "img2img_imagenet":
         img2img_imagenet,
 }

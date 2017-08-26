@@ -70,6 +70,7 @@ flags.DEFINE_string("data_dir", "/tmp/data", "Directory with training data.")
 flags.DEFINE_integer("train_steps", 250000,
                      "The number of steps to run training for.")
 flags.DEFINE_integer("eval_steps", 10, "Number of steps in evaluation.")
+# TODO(fstahlberg): eval_print used anywhere?
 flags.DEFINE_bool("eval_print", False, "Print eval logits and predictions.")
 flags.DEFINE_integer("keep_checkpoint_max", 6,
                      "How many recent and best checkpoints to keep.")
@@ -79,6 +80,16 @@ flags.DEFINE_string("target_metric", "approx_bleu_score", "Metric which is "
                     "used to select the models to store in train_dir/best: "
                     "accuracy_per_sequence, accuracy_top5, accuracy, "
                     "neg_log_perplexity, approx_bleu_score.")
+flags.DEFINE_bool("eval_run_autoregressive", False,
+                  "Run eval autoregressively where we condition on previous"
+                  "generated output instead of the actual target.")
+flags.DEFINE_integer("keep_checkpoint_every_n_hours", 10000,
+                     "Number of hours between each checkpoint to be saved. "
+                     "The default value 10,000 hours effectively disables it.")
+flags.DEFINE_integer("save_checkpoints_secs", 0,
+                     "Save checkpoints every this many seconds. "
+                     "Default=0 means let tensorflow.contrib.learn.python.learn"
+                     " decide, which is currently set to 600 = 10 minutes.")
 
 # Distributed training flags
 flags.DEFINE_string("master", "", "Address of TensorFlow master.")
@@ -130,6 +141,9 @@ flags.DEFINE_bool("decode_return_beams", False,
 flags.DEFINE_integer("decode_max_input_size", -1,
                      "Maximum number of ids in input. Or <= 0 for no max.")
 flags.DEFINE_bool("identity_output", False, "To print the output as identity")
+flags.DEFINE_integer("decode_num_samples", -1,
+                     "Number of samples to decode. Currently used in"
+                     "decode_from_dataset. Use -1 for all.")
 
 
 class SaveBestCheckpointsMonitor(monitors.ValidationMonitor):
@@ -235,14 +249,15 @@ def make_experiment_fn(data_dir, model_name, train_steps, eval_steps):
 def create_experiment(output_dir, data_dir, model_name, train_steps,
                       eval_steps):
   """Create Experiment."""
-  hparams = create_hparams(FLAGS.hparams_set, data_dir)
+  hparams = create_hparams(FLAGS.hparams_set, FLAGS.problems, data_dir,
+                           passed_hparams=FLAGS.hparams)
   estimator, input_fns = create_experiment_components(
       hparams=hparams,
       output_dir=output_dir,
       data_dir=data_dir,
       model_name=model_name)
   eval_metrics = metrics.create_evaluation_metrics(
-      zip(FLAGS.problems.split("-"), hparams.problem_instances))
+      zip(FLAGS.problems.split("-"), hparams.problem_instances), hparams)
   if (hasattr(FLAGS, "autotune") and FLAGS.autotune and
       FLAGS.objective not in eval_metrics):
     raise ValueError("Tuning objective %s not among evaluation metrics %s" %
@@ -293,23 +308,30 @@ def create_experiment_components(hparams, output_dir, data_dir, model_name):
       hparams=hparams,
       data_file_patterns=get_data_filepatterns(data_dir,
                                                tf.contrib.learn.ModeKeys.TRAIN),
-      num_datashards=num_datashards)
+      num_datashards=num_datashards,
+      worker_replicas=FLAGS.worker_replicas,
+      worker_id=FLAGS.worker_id)
 
   eval_input_fn = input_fn_builder.build_input_fn(
       mode=tf.contrib.learn.ModeKeys.EVAL,
       hparams=hparams,
       data_file_patterns=get_data_filepatterns(data_dir,
                                                tf.contrib.learn.ModeKeys.EVAL),
-      num_datashards=num_datashards)
+      num_datashards=num_datashards,
+      worker_replicas=FLAGS.worker_replicas,
+      worker_id=FLAGS.worker_id)
   estimator = tf.contrib.learn.Estimator(
-      model_fn=model_builder.build_model_fn(model_name, hparams=hparams),
+      model_fn=model_builder.build_model_fn(model_name, hparams),
       model_dir=output_dir,
       config=tf.contrib.learn.RunConfig(
           master=FLAGS.master,
           model_dir=output_dir,
           gpu_memory_fraction=FLAGS.worker_gpu_memory_fraction,
           session_config=session_config(),
-          keep_checkpoint_max=FLAGS.keep_checkpoint_max))
+          keep_checkpoint_max=FLAGS.keep_checkpoint_max,
+          keep_checkpoint_every_n_hours=FLAGS.keep_checkpoint_every_n_hours,
+          save_checkpoints_secs=FLAGS.save_checkpoints_secs))
+
   # Store the hparams in the estimator as well
   estimator.hparams = hparams
   return estimator, {
@@ -331,10 +353,13 @@ def add_problem_hparams(hparams, problems):
   for problem_name in problems.split("-"):
     try:
       problem = registry.problem(problem_name)
-      p_hparams = problem.internal_hparams(hparams)
     except ValueError:
       problem = None
+
+    if problem is None:
       p_hparams = problem_hparams.problem_hparams(problem_name, hparams)
+    else:
+      p_hparams = problem.internal_hparams(hparams)
 
     hparams.problem_instances.append(problem)
     hparams.problems.append(p_hparams)
@@ -342,7 +367,7 @@ def add_problem_hparams(hparams, problems):
   return hparams
 
 
-def create_hparams(params_id, data_dir):
+def create_hparams(params_id, problems, data_dir, passed_hparams=None):
   """Returns hyperparameters, including any flag value overrides.
 
   If the hparams FLAG is set, then it will use any values specified in
@@ -351,7 +376,9 @@ def create_hparams(params_id, data_dir):
 
   Args:
     params_id: which set of parameters to choose (must be in _PARAMS above).
+    problems: the string with problem names to get problem_hparams from.
     data_dir: the directory containing the training data.
+    passed_hparams: command-line overrides for some hparams.
 
   Returns:
     The hyperparameters as a tf.contrib.training.HParams object.
@@ -359,10 +386,10 @@ def create_hparams(params_id, data_dir):
   hparams = registry.hparams(params_id)()
   hparams.add_hparam("data_dir", data_dir)
   # Command line flags override any of the preceding hyperparameter values.
-  if FLAGS.hparams:
-    hparams = hparams.parse(FLAGS.hparams)
+  if passed_hparams:
+    hparams = hparams.parse(passed_hparams)
 
-  return add_problem_hparams(hparams, FLAGS.problems)
+  return add_problem_hparams(hparams, problems)
 
 
 def run(data_dir, model, output_dir, train_steps, eval_steps, schedule):
@@ -446,7 +473,7 @@ def get_data_filepatterns(data_dir, mode):
 def decode(estimator):
   if FLAGS.decode_interactive:
     decoding.decode_interactively(estimator)
-  elif FLAGS.decode_from_file is not None:
+  elif FLAGS.decode_from_file is not None and FLAGS.decode_from_file is not "":
     decoding.decode_from_file(estimator, FLAGS.decode_from_file)
   elif FLAGS.decode_from_dataset:
     decoding.decode_from_dataset(estimator)

@@ -32,10 +32,25 @@ from six.moves import xrange  # pylint: disable=redefined-builtin
 from tensor2tensor.layers import common_attention
 from tensor2tensor.layers import common_hparams
 from tensor2tensor.layers import common_layers
+from tensor2tensor.utils import diet
+from tensor2tensor.utils import expert_utils
 from tensor2tensor.utils import registry
 from tensor2tensor.utils import t2t_model
 
 import tensorflow as tf
+
+
+class AttentionMoeType(object):
+  NONE = "none"
+  LOCAL = "local"
+  GLOBAL = "global"
+
+  @staticmethod
+  def get_choices():
+    return [
+        AttentionMoeType.NONE,
+        AttentionMoeType.LOCAL,
+    ]
 
 
 @registry.register_model
@@ -49,46 +64,85 @@ class AttentionLmMoe(t2t_model.T2TModel):
     targets = sharded_features["targets"]
     targets = dp(tf.squeeze, targets, 2)
 
+    def preprocess(x):
+      return dp(common_layers.layer_preprocess, x, hparams)
+
+    def postprocess(x, y):
+      return dp(common_layers.layer_postprocess, x, y, hparams)
+
     (decoder_input, decoder_self_attention_bias) = dp(
         attention_lm_moe_prepare_decoder, targets, hparams)
 
-    def residual_fn(x, y):
-      return common_layers.layer_norm(x + tf.nn.dropout(
-          y, 1.0 - hparams.residual_dropout))
-
-    x = dp(tf.nn.dropout, decoder_input, 1.0 - hparams.residual_dropout)
+    x = dp(tf.nn.dropout, decoder_input,
+           1.0 - hparams.layer_prepostprocess_dropout)
     extra_loss = 0.0
+    moe_hidden_sizes = [int(s) for s in hparams.moe_hidden_sizes.split(",")]
+    if hparams.diet_experts:
+      hsize, = moe_hidden_sizes
+
+      def _diet_expert(x):
+        return diet.diet_expert(x, hsize, diet.diet_adam_optimizer_params())
+
+      expert_fn = _diet_expert
+    else:
+      expert_fn = expert_utils.ffn_expert_fn(
+          hparams.hidden_size, moe_hidden_sizes, hparams.hidden_size)
     for layer in xrange(hparams.num_hidden_layers):
       with tf.variable_scope("layer_%d" % layer):
-        with tf.variable_scope("attention"):
-          y = dp(
-              common_attention.multihead_attention,
-              x,
-              None,
-              decoder_self_attention_bias,
-              hparams.attention_key_channels or hparams.hidden_size,
-              hparams.attention_value_channels or hparams.hidden_size,
-              hparams.hidden_size,
-              hparams.num_heads,
-              hparams.attention_dropout,
-              name="decoder_self_attention")
-          x = dp(residual_fn, x, y)
+        with tf.variable_scope(
+            "attention_{}".format(hparams.attention_moe_type)):
+          x = preprocess(x)
+          if hparams.attention_moe_type == AttentionMoeType.NONE:
+            y = dp(
+                common_attention.multihead_attention,
+                x,
+                None,
+                decoder_self_attention_bias,
+                hparams.attention_key_channels or hparams.hidden_size,
+                hparams.attention_value_channels or hparams.hidden_size,
+                hparams.hidden_size,
+                hparams.num_heads,
+                hparams.attention_dropout,
+                name="decoder_self_attention")
+          elif hparams.attention_moe_type == AttentionMoeType.LOCAL:
+            y, loss = dp(
+                common_attention.local_expert_attention,
+                x,
+                k=2,
+                loss_coef=1e-2,
+                attention_num_experts=hparams.attention_num_experts,
+                train=hparams.mode == tf.contrib.learn.ModeKeys.TRAIN,
+                mask_right=True,
+                attention_kq_size=hparams.attention_kq_size,
+                attention_v_size=hparams.attention_v_size)
+            # TODO(avaswani, epot, noam): Do we need to divide by num shards ?
+            extra_loss += tf.add_n(loss) / dp.n
+          else:
+            raise ValueError("Only {} supported for now.".format(
+                AttentionMoeType.get_choices()))
+          x = postprocess(x, y)
         with tf.variable_scope("ffn"):
           if str(layer) in hparams.moe_layers.split(","):
-            y, loss = common_layers.moe_layer(
-                dp, self._ps_devices, x,
+            y, loss = expert_utils.distributed_moe(
+                dp,
+                self._ps_devices,
+                preprocess(x),
                 hparams.mode == tf.contrib.learn.ModeKeys.TRAIN,
-                hparams.hidden_size, hparams.moe_hidden_size, hparams.moe_n1,
-                hparams.moe_n2, hparams.moe_loss_coef)
+                input_size=hparams.hidden_size,
+                expert_fn=expert_fn,
+                num_experts=hparams.moe_num_experts,
+                k=hparams.moe_k,
+                loss_coef=hparams.moe_loss_coef)
             extra_loss += loss
           else:
             y = dp(
                 common_layers.conv_hidden_relu,
-                x,
+                preprocess(x),
                 hparams.filter_size,
                 hparams.hidden_size,
                 dropout=hparams.relu_dropout)
-          x = dp(residual_fn, x, y)
+          x = postprocess(x, y)
+    x = preprocess(x)
     decoder_output = dp(tf.expand_dims, x, 2)
     return decoder_output, extra_loss
 
@@ -105,8 +159,12 @@ def attention_lm_moe_prepare_decoder(targets, hparams):
     decoder_self_attention_bias: a Tensor, containing large negative values
     to implement masked attention and possibly baises for diagonal alignments
   """
-  decoder_self_attention_bias = (
-      common_attention.attention_bias_lower_triangle(tf.shape(targets)[1]))
+  if hparams.prepend_mode == "prepend_inputs_full_attention":
+    decoder_self_attention_bias = (common_attention.attention_bias_prepended(
+        common_attention.embedding_to_padding(targets)))
+  else:
+    decoder_self_attention_bias = (
+        common_attention.attention_bias_lower_triangle(tf.shape(targets)[1]))
   decoder_input = common_layers.shift_left_3d(targets)
   if hparams.pos == "timing":
     decoder_input = common_attention.add_timing_signal_1d(decoder_input)
@@ -145,16 +203,7 @@ def attention_lm_moe_base():
   hparams.label_smoothing = 0.0
   hparams.shared_embedding_and_softmax_weights = int(False)
   hparams.add_hparam("filter_size", 2048)  # Add new ones like this.
-  # comma-separated list of layer numbers.
-  # At each of these layers, we replace the ffn with a mixture of experts.
-  hparams.add_hparam("moe_layers", "2")
-  # If moe_n2 is None, then use a flat MoE with moe_n1 experts.
-  # If moe_n2 is an integer, then use a hierarchical MoE
-  #   consisting of moe_n1 groups of moe_n2 experts each.
-  hparams.add_hparam("moe_n1", 32)
-  hparams.add_hparam("moe_n2", 0)
-  hparams.add_hparam("moe_hidden_size", 2048)
-  hparams.add_hparam("moe_loss_coef", 1e-2)
+  hparams.moe_num_experts = 32
   # attention-related flags
   hparams.add_hparam("num_heads", 8)
   hparams.add_hparam("attention_key_channels", 0)
@@ -163,8 +212,25 @@ def attention_lm_moe_base():
   # when not in training mode.
   hparams.add_hparam("attention_dropout", 0.0)
   hparams.add_hparam("relu_dropout", 0.0)
-  hparams.add_hparam("residual_dropout", 0.1)
   hparams.add_hparam("pos", "timing")  # timing, none
+  hparams.add_hparam("moe_layers", "2")  # comma separated list of layer numbers
+  # moe params. local attention moe.
+  hparams.add_hparam("attention_moe_type", AttentionMoeType.NONE)
+  hparams.add_hparam("attention_num_experts", 16)
+  # Key, query and value dimensions for the attention
+  hparams.add_hparam("attention_kq_size", 64)
+  hparams.add_hparam("attention_v_size", 64)
+  hparams.add_hparam("diet_experts", int(False))
+  return hparams
+
+
+@registry.register_hparams
+def attention_lm_moe_base_ae():
+  """Base model with attention expert."""
+  hparams = attention_lm_moe_base()
+  hparams.attention_moe_type = AttentionMoeType.LOCAL
+  hparams.max_length = hparams.batch_size
+  hparams.eval_drop_long_sequences = int(True)
   return hparams
 
 
@@ -185,9 +251,35 @@ def attention_lm_moe_small():
   hparams.num_hidden_layers = 4
   hparams.hidden_size = 512
   hparams.filter_size = 2048
-  hparams.moe_n1 = 128
+  hparams.moe_num_experts = 128
   hparams.moe_layers = "2"
-  hparams.moe_hidden_size = 2048
+  return hparams
+
+
+@registry.register_hparams
+def attention_lm_moe_tiny():
+  """Cheap model for debugging.
+
+  Returns:
+    an hparams object.
+  """
+  hparams = attention_lm_moe_small()
+  hparams.moe_num_experts = 32
+  return hparams
+
+
+@registry.register_hparams
+def attention_lm_attention_moe_tiny():
+  """Cheap model for debugging.
+
+  Returns:
+    an hparams object.
+  """
+  hparams = attention_lm_moe_small()
+  hparams.moe_layers = ""
+  hparams.attention_num_experts = 128
+  hparams.filter_size = 8192
+  hparams.attention_moe_type = AttentionMoeType.LOCAL
   return hparams
 
 
@@ -230,7 +322,50 @@ def attention_lm_moe_large():
   hparams.hidden_size = 1024
   hparams.num_heads = 16
   hparams.filter_size = 4096
-  hparams.moe_hidden_size = 4096
-  hparams.moe_n1 = 128
-  hparams.residual_dropout = 0.2
+  hparams.moe_hidden_sizes = "4096"
+  hparams.moe_num_experts = 128
+  hparams.layer_prepostprocess_dropout = 0.2
+  return hparams
+
+
+@registry.register_hparams
+def attention_lm_moe_large_diet():
+  hparams = attention_lm_moe_large()
+  hparams.diet_experts = int(True)
+  return hparams
+
+
+@registry.register_hparams
+def attention_lm_moe_32b_diet():
+  """Unnecessarily large model with 32B params - because we can."""
+  hparams = attention_lm_moe_large_diet()
+  hparams.moe_hidden_sizes = "16384"
+  hparams.moe_num_experts = 1024
+  return hparams
+
+
+@registry.register_hparams
+def attention_lm_moe_24b_diet():
+  """Unnecessarily large model with 24B params - because we can."""
+  hparams = attention_lm_moe_large_diet()
+  hparams.moe_hidden_sizes = "12288"
+  hparams.moe_num_experts = 1024
+  hparams.batch_size = 4096
+  return hparams
+
+
+@registry.register_hparams
+def attention_lm_moe_translation():
+  """Version to use for seq2seq."""
+  hparams = attention_lm_moe_base()
+  hparams.layer_preprocess_sequence = "n"
+  hparams.layer_postprocess_sequence = "da"
+  hparams.learning_rate = 0.4
+  hparams.prepend_mode = "prepend_inputs_masked_attention"
+  hparams.max_length = 512
+  hparams.label_smoothing = 0.1
+  hparams.layer_prepostprocess_dropout = 0.2
+  hparams.num_hidden_layers = 6
+  hparams.moe_layers = "0,1,2,3,4,5"
+  hparams.shared_embedding_and_softmax_weights = int(True)
   return hparams

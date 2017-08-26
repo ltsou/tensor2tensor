@@ -21,6 +21,8 @@ from __future__ import print_function
 
 # Dependency imports
 
+from six.moves import xrange  # pylint: disable=redefined-builtin
+
 from tensor2tensor.data_generators import algorithmic
 
 import tensorflow as tf
@@ -29,15 +31,17 @@ import tensorflow as tf
 class AlgorithmicTest(tf.test.TestCase):
 
   def testIdentityGenerator(self):
+    identity_problem = algorithmic.AlgorithmicIdentityBinary40()
     counter = 0
-    for d in algorithmic.identity_generator(3, 8, 10):
+    for d in identity_problem.generator(3, 8, 10):
       counter += 1
       self.assertEqual(d["inputs"], d["targets"])
     self.assertEqual(counter, 10)
 
   def testReverseGenerator(self):
+    reversing_problem = algorithmic.AlgorithmicReverseBinary40()
     counter = 0
-    for d in algorithmic.reverse_generator(3, 8, 10):
+    for d in reversing_problem.generator(3, 8, 10):
       counter += 1
       self.assertEqual(list(reversed(d["inputs"])), d["targets"])
     self.assertEqual(counter, 10)
@@ -76,8 +80,9 @@ class AlgorithmicTest(tf.test.TestCase):
     self.assertEqual(algorithmic.number_to_lower_endian(2137, 10), [7, 3, 1, 2])
 
   def testAdditionGenerator(self):
+    addition_problem = algorithmic.AlgorithmicAdditionBinary40()
     counter = 0
-    for d in algorithmic.addition_generator(4, 8, 10):
+    for d in addition_problem.generator(4, 8, 10):
       counter += 1
       self.assertEqual(d["inputs"].count(4), 1)
       self.assertEqual(d["inputs"].count(5), 0)
@@ -86,8 +91,9 @@ class AlgorithmicTest(tf.test.TestCase):
     self.assertEqual(counter, 10)
 
   def testMultiplicationGenerator(self):
+    multiplication_problem = algorithmic.AlgorithmicMultiplicationBinary40()
     counter = 0
-    for d in algorithmic.multiplication_generator(4, 8, 10):
+    for d in multiplication_problem.generator(4, 8, 10):
       counter += 1
       self.assertEqual(d["inputs"].count(4), 1)
       self.assertEqual(d["inputs"].count(5), 0)

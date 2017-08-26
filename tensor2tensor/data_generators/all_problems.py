@@ -22,6 +22,9 @@ from __future__ import print_function
 from tensor2tensor.data_generators import algorithmic
 from tensor2tensor.data_generators import algorithmic_math
 from tensor2tensor.data_generators import audio
+from tensor2tensor.data_generators import cipher
+from tensor2tensor.data_generators import desc2code
+from tensor2tensor.data_generators import ice_parsing
 from tensor2tensor.data_generators import image
 from tensor2tensor.data_generators import lm1b
 from tensor2tensor.data_generators import ptb
@@ -40,3 +43,4 @@ except ImportError:
   pass
 # pylint: enable=g-import-not-at-top
 # pylint: enable=unused-import
+

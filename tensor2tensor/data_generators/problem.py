@@ -84,6 +84,24 @@ class SpaceID(object):
   REAL = 24
   # Images
   IMAGE = 25
+  # Peptide
+  PEPTIDE = 26
+  # Python
+  PY_TOK = 27
+  # C++
+  CPP_TOK = 28
+
+
+def preprocess_examples_common(examples, hparams):
+  """Preprocessing steps common to all models."""
+  if hparams.max_input_seq_length > 0:
+    examples["inputs"] = examples["inputs"][:hparams.max_input_seq_length]
+  if hparams.max_target_seq_length > 0:
+    examples["targets"] = examples["targets"][:hparams.max_target_seq_length]
+  if hparams.prepend_mode != "none":
+    examples["targets"] = tf.concat(
+        [examples["inputs"], [0], examples["targets"]], 0)
+  return examples
 
 
 class Problem(object):
@@ -98,7 +116,10 @@ class Problem(object):
     * generate_data(data_dir, tmp_dir)
         - Generate training and dev datasets into data_dir.
         - Additonal files, e.g. vocabulary files, should also be written to
-          data_dir.
+          data_dir. Vocab files are newline-separated files with each line
+          containing a token. The standard convention for the filename is to
+          set it to be
+                  ${Problem.vocab_name}.${Problem.targeted_vocab_size}
         - Downloads and other files can be written to tmp_dir
         - If you have a training and dev generator, you can generate the
           training and dev datasets with
@@ -166,11 +187,7 @@ class Problem(object):
 
   def preprocess_examples(self, examples, mode, hparams):
     del mode
-    if hparams.max_input_seq_length > 0:
-      examples["inputs"] = examples["inputs"][:hparams.max_input_seq_length]
-    if hparams.max_target_seq_length > 0:
-      examples["targets"] = examples["targets"][:hparams.max_target_seq_length]
-    return examples
+    return preprocess_examples_common(examples, hparams)
 
   def eval_metrics(self):
     return [
@@ -186,22 +203,22 @@ class Problem(object):
     file_basename = self.dataset_filename()
     if not shuffled:
       file_basename += generator_utils.UNSHUFFLED_SUFFIX
-    return generator_utils.train_data_filenames(
-        file_basename, data_dir, num_shards)
+    return generator_utils.train_data_filenames(file_basename, data_dir,
+                                                num_shards)
 
   def dev_filepaths(self, data_dir, num_shards, shuffled):
     file_basename = self.dataset_filename()
     if not shuffled:
       file_basename += generator_utils.UNSHUFFLED_SUFFIX
-    return generator_utils.dev_data_filenames(
-        file_basename, data_dir, num_shards)
+    return generator_utils.dev_data_filenames(file_basename, data_dir,
+                                              num_shards)
 
   def test_filepaths(self, data_dir, num_shards, shuffled):
     file_basename = self.dataset_filename()
     if not shuffled:
       file_basename += generator_utils.UNSHUFFLED_SUFFIX
-    return generator_utils.test_data_filenames(
-        file_basename, data_dir, num_shards)
+    return generator_utils.test_data_filenames(file_basename, data_dir,
+                                               num_shards)
 
   def __init__(self, was_reversed=False, was_copy=False):
     """Create a Problem.
@@ -345,13 +362,14 @@ class Text2TextProblem(Problem):
   def targeted_vocab_size(self):
     raise NotImplementedError()  # Not needed if self.is_character_level.
 
-  def train_generator(self, data_dir, tmp_dir, is_training):
-    """Generator of the training data."""
+  def generator(self, data_dir, tmp_dir, is_training):
+    """Generator for the training and evaluation data."""
     raise NotImplementedError()
 
-  def dev_generator(self, data_dir, tmp_dir):
-    """Generator of the development data."""
-    return self.train_generator(data_dir, tmp_dir, False)
+  @property
+  def use_train_shards_for_dev(self):
+    """If true, we only generate training data and hold out shards for dev."""
+    return False
 
   @property
   def input_space_id(self):
@@ -364,6 +382,10 @@ class Text2TextProblem(Problem):
   @property
   def num_shards(self):
     raise NotImplementedError()
+
+  @property
+  def num_dev_shards(self):
+    return 1
 
   @property
   def vocab_name(self):
@@ -382,11 +404,19 @@ class Text2TextProblem(Problem):
     return True  # Set to False for language models.
 
   def generate_data(self, data_dir, tmp_dir, task_id=-1):
-    generator_utils.generate_dataset_and_shuffle(
-        self.train_generator(data_dir, tmp_dir, True),
-        self.training_filepaths(data_dir, self.num_shards, shuffled=False),
-        self.dev_generator(data_dir, tmp_dir),
-        self.dev_filepaths(data_dir, 1, shuffled=False))
+    train_paths = self.training_filepaths(
+        data_dir, self.num_shards, shuffled=False)
+    dev_paths = self.dev_filepaths(
+        data_dir, self.num_dev_shards, shuffled=False)
+    if self.use_train_shards_for_dev:
+      all_paths = train_paths + dev_paths
+      generator_utils.generate_files(
+          self.generator(data_dir, tmp_dir, True), all_paths)
+      generator_utils.shuffle_dataset(all_paths)
+    else:
+      generator_utils.generate_dataset_and_shuffle(
+          self.generator(data_dir, tmp_dir, True), train_paths,
+          self.generator(data_dir, tmp_dir, False), dev_paths)
 
   def feature_encoders(self, data_dir):
     if self.is_character_level:
@@ -406,8 +436,9 @@ class Text2TextProblem(Problem):
 
     if self.has_inputs:
       source_vocab_size = self._encoders["inputs"].vocab_size
-      p.input_modality = {"inputs": (registry.Modalities.SYMBOL,
-                                     source_vocab_size)}
+      p.input_modality = {
+          "inputs": (registry.Modalities.SYMBOL, source_vocab_size)
+      }
     target_vocab_size = self._encoders["targets"].vocab_size
     p.target_modality = (registry.Modalities.SYMBOL, target_vocab_size)
     if self.has_inputs:
@@ -420,5 +451,6 @@ class Text2TextProblem(Problem):
     return [
         metrics.Metrics.ACC, metrics.Metrics.ACC_TOP5,
         metrics.Metrics.ACC_PER_SEQ, metrics.Metrics.NEG_LOG_PERPLEXITY,
-        metrics.Metrics.APPROX_BLEU
+        metrics.Metrics.APPROX_BLEU, metrics.Metrics.ROUGE_2_F,
+        metrics.Metrics.ROUGE_L_F
     ]

@@ -48,7 +48,6 @@ if six.PY2:
 else:
   RESERVED_TOKENS_BYTES = [bytes(PAD, "ascii"), bytes(EOS, "ascii")]
 
-
 # Regular expression for unescaping token strings.
 # '\u' is converted to '_'
 # '\\' is converted to '\'
@@ -57,19 +56,21 @@ _UNESCAPE_REGEX = re.compile(r"\\u|\\\\|\\([0-9]+);")
 _ESCAPE_CHARS = set(u"\\_u;0123456789")
 
 
-def native_to_unicode_py2(s):
-  """Python 2: transform native string to Unicode."""
-  return s if isinstance(s, unicode) else s.decode("utf8")
-
-
-# Conversion between Unicode and UTF-8, if required (on Python2)
+# Conversion between Unicode and UTF-8, if required (on Python2).
 if six.PY2:
-  native_to_unicode = native_to_unicode_py2
-  unicode_to_native = lambda s: s.encode("utf-8")
-else:
-  # No conversion required on Python3
-  native_to_unicode = lambda s: s
-  unicode_to_native = lambda s: s
+
+  def native_to_unicode(s):
+    return s if isinstance(s, unicode) else s.decode("utf8")
+
+  def unicode_to_native(s):
+    return s.encode("utf-8")
+else:  # No conversion required on Python >= 3.
+
+  def native_to_unicode(s):
+    return s
+
+  def unicode_to_native(s):
+    return s
 
 
 class TextEncoder(object):
@@ -154,14 +155,36 @@ class ByteTextEncoder(TextEncoder):
 
 
 class TokenTextEncoder(TextEncoder):
-  """Encoder based on a user-supplied vocabulary."""
+  """Encoder based on a user-supplied vocabulary (file or list)."""
 
-  def __init__(self, vocab_filename, reverse=False,
+  def __init__(self,
+               vocab_filename,
+               reverse=False,
+               vocab_list=None,
                num_reserved_ids=NUM_RESERVED_TOKENS):
-    """Initialize from a file, one token per line."""
+    """Initialize from a file or list, one token per line.
+
+    Handling of reserved tokens works as follows:
+    - When initializing from a list, we add reserved tokens to the vocab.
+    - When initializing from a file, we do not add reserved tokens to the vocab.
+    - When saving vocab files, we save reserved tokens to the file.
+
+    Args:
+      vocab_filename: If not None, the full filename to read vocab from. If this
+         is not None, then vocab_list should be None.
+      reverse: Boolean indicating if tokens should be reversed during encoding
+         and decoding.
+      vocab_list: If not None, a list of elements of the vocabulary. If this is
+         not None, then vocab_filename should be None.
+      num_reserved_ids: Number of IDs to save for reserved tokens like <EOS>.
+    """
     super(TokenTextEncoder, self).__init__(num_reserved_ids=num_reserved_ids)
     self._reverse = reverse
-    self._load_vocab_from_file(vocab_filename)
+    if vocab_filename:
+      self._init_vocab_from_file(vocab_filename)
+    else:
+      assert vocab_list is not None
+      self._init_vocab_from_list(vocab_list)
 
   def encode(self, sentence):
     """Converts a space-separated string of tokens to a list of ids."""
@@ -179,22 +202,65 @@ class TokenTextEncoder(TextEncoder):
   def _safe_id_to_token(self, idx):
     return self._id_to_token.get(idx, "ID_%d" % idx)
 
-  def _load_vocab_from_file(self, filename):
-    """Load vocab from a file."""
-    self._token_to_id = {}
+  def _init_vocab_from_file(self, filename):
+    """Load vocab from a file.
+
+    Args:
+      filename: The file to load vocabulary from.
+    """
+    def token_gen():
+      with tf.gfile.Open(filename) as f:
+        for line in f:
+          token = line.strip()
+          yield token
+
+    self._init_vocab(token_gen(), add_reserved_tokens=False)
+
+  def _init_vocab_from_list(self, vocab_list):
+    """Initialize tokens from a list of tokens.
+
+    It is ok if reserved tokens appear in the vocab list. They will be
+    removed. The set of tokens in vocab_list should be unique.
+
+    Args:
+      vocab_list: A list of tokens.
+    """
+    def token_gen():
+      for token in vocab_list:
+        if token not in RESERVED_TOKENS:
+          yield token
+
+    self._init_vocab(token_gen())
+
+  def _init_vocab(self, token_generator, add_reserved_tokens=True):
+    """Initialize vocabulary with tokens from token_generator."""
+
     self._id_to_token = {}
+    non_reserved_start_index = 0
 
-    for idx, tok in enumerate(RESERVED_TOKENS):
-      self._token_to_id[tok] = idx
-      self._id_to_token[idx] = tok
+    if add_reserved_tokens:
+      self._id_to_token.update(enumerate(RESERVED_TOKENS))
+      non_reserved_start_index = len(RESERVED_TOKENS)
 
-    token_start_idx = self._num_reserved_ids
-    with tf.gfile.Open(filename) as f:
-      for i, line in enumerate(f):
-        idx = token_start_idx + i
-        tok = line.strip()
-        self._token_to_id[tok] = idx
-        self._id_to_token[idx] = tok
+    self._id_to_token.update(
+        enumerate(token_generator, start=non_reserved_start_index))
+
+    # _token_to_id is the reverse of _id_to_token
+    self._token_to_id = dict((v, k)
+                             for k, v in six.iteritems(self._id_to_token))
+
+  def store_to_file(self, filename):
+    """Write vocab file to disk.
+
+    Vocab files have one token per line. The file ends in a newline. Reserved
+    tokens are written to the vocab file as well.
+
+    Args:
+      filename: Full path of the file to store the vocab to.
+    """
+    with tf.gfile.Open(filename, "w") as f:
+      for i in xrange(len(self._id_to_token)):
+        f.write(self._id_to_token[i] + "\n")
 
 
 def _escape_token(token, alphabet):
@@ -218,9 +284,7 @@ def _escape_token(token, alphabet):
     raise ValueError("Expected string type for token, got %s" % type(token))
 
   token = token.replace(u"\\", u"\\\\").replace(u"_", u"\\u")
-  ret = [
-      c if c in alphabet and c != u"\n" else r"\%d;" % ord(c)
-      for c in token]
+  ret = [c if c in alphabet and c != u"\n" else r"\%d;" % ord(c) for c in token]
   return u"".join(ret) + "_"
 
 
@@ -233,6 +297,7 @@ def _unescape_token(escaped_token):
   Returns:
     token: a unicode string
   """
+
   def match(m):
     if m.group(1) is None:
       return u"_" if m.group(0) == u"\\u" else u"\\"
@@ -280,7 +345,12 @@ class SubwordTextEncoder(TextEncoder):
   """
 
   def __init__(self, filename=None):
-    """Initialize and read from a file, if provided."""
+    """Initialize and read from a file, if provided.
+
+    Args:
+      filename: filename from which to read vocab. If None, do not load a
+        vocab
+    """
     self._alphabet = set()
     if filename is not None:
       self._load_from_file(filename)
@@ -294,8 +364,8 @@ class SubwordTextEncoder(TextEncoder):
     Returns:
       a list of integers in the range [0, vocab_size)
     """
-    return self._tokens_to_subtoken_ids(tokenizer.encode(
-        native_to_unicode(raw_text)))
+    return self._tokens_to_subtoken_ids(
+        tokenizer.encode(native_to_unicode(raw_text)))
 
   def decode(self, subtokens):
     """Converts a sequence of subtoken ids to a native string.
@@ -305,8 +375,8 @@ class SubwordTextEncoder(TextEncoder):
     Returns:
       a native string
     """
-    return unicode_to_native(tokenizer.decode(
-        self._subtoken_ids_to_tokens(subtokens)))
+    return unicode_to_native(
+        tokenizer.decode(self._subtoken_ids_to_tokens(subtokens)))
 
   @property
   def vocab_size(self):
@@ -323,8 +393,9 @@ class SubwordTextEncoder(TextEncoder):
     """
     ret = []
     for token in tokens:
-      ret.extend(self._escaped_token_to_subtoken_ids(
-          _escape_token(token, self._alphabet)))
+      ret.extend(
+          self._escaped_token_to_subtoken_ids(
+              _escape_token(token, self._alphabet)))
     return ret
 
   def _subtoken_ids_to_tokens(self, subtokens):
@@ -386,7 +457,8 @@ class SubwordTextEncoder(TextEncoder):
     """
     return [
         self._subtoken_string_to_id[subtoken]
-        for subtoken in self._escaped_token_to_subtoken_strings(escaped_token)]
+        for subtoken in self._escaped_token_to_subtoken_strings(escaped_token)
+    ]
 
   @classmethod
   def build_to_target_size(cls,
@@ -414,20 +486,23 @@ class SubwordTextEncoder(TextEncoder):
       ValueError: If `min_val` is greater than `max_val`.
     """
     if min_val > max_val:
-      raise ValueError(
-          "Lower bound for the minimum token count "
-          "is greater than the upper bound.")
+      raise ValueError("Lower bound for the minimum token count "
+                       "is greater than the upper bound.")
+    if target_size < 1:
+      raise ValueError("Target size must be positive.")
 
     def bisect(min_val, max_val):
       """Bisection to find the right size."""
       present_count = (max_val + min_val) // 2
       tf.logging.info("Trying min_count %d" % present_count)
       subtokenizer = cls()
-      subtokenizer.build_from_token_counts(
-          token_counts, present_count, num_iterations)
+      subtokenizer.build_from_token_counts(token_counts, present_count,
+                                           num_iterations)
 
+      # Being within 1% of the target size is ok.
+      is_ok = abs(subtokenizer.vocab_size - target_size) * 100 < target_size
       # If min_val == max_val, we can't do any better than this.
-      if subtokenizer.vocab_size == target_size or min_val >= max_val:
+      if is_ok or min_val >= max_val or present_count < 2:
         return subtokenizer
 
       if subtokenizer.vocab_size > target_size:
@@ -498,7 +573,7 @@ class SubwordTextEncoder(TextEncoder):
       # Consider the candidates longest to shortest, so that if we accept
       # a longer subtoken string, we can decrement the counts of its prefixes.
       new_subtoken_strings = []
-      for lsub in xrange(len(len_to_subtoken_strings)-1, 0, -1):
+      for lsub in xrange(len(len_to_subtoken_strings) - 1, 0, -1):
         subtoken_strings = len_to_subtoken_strings[lsub]
         for subtoken_string in subtoken_strings:
           count = subtoken_counts[subtoken_string]
@@ -511,8 +586,8 @@ class SubwordTextEncoder(TextEncoder):
               subtoken_counts[subtoken_string[:l]] -= count
 
       # Include the alphabet explicitly to guarantee all strings are encodable.
-      new_subtoken_strings.extend(
-          (subtoken_counts.get(a, 0), a) for a in self._alphabet)
+      new_subtoken_strings.extend((subtoken_counts.get(a, 0), a)
+                                  for a in self._alphabet)
       new_subtoken_strings.sort(reverse=True)
 
       # Reinitialize to the candidate vocabulary.
@@ -529,13 +604,33 @@ class SubwordTextEncoder(TextEncoder):
                      for i, s in sorted(subtoken_strings)))
 
   def _init_subtokens_from_list(self, subtoken_strings, reserved=0):
-    """Initialize token information from a list of subtoken strings."""
-    self._all_subtoken_strings = [u""] * reserved + subtoken_strings
+    """Initialize token information from a list of subtoken strings.
+
+    Args:
+      subtoken_strings: a list of subtokens
+      reserved: number of spaces to save at the beginning for reserved tokens
+
+    Raises:
+      ValueError: if reserved is not 0 or len(RESERVED_TOKENS). In this case, it
+        is not clear what the space is being reserved for, or when it will be
+        filled in.
+    """
+    if reserved == 0:
+      self._all_subtoken_strings = subtoken_strings
+    elif reserved == len(RESERVED_TOKENS):
+      self._all_subtoken_strings = RESERVED_TOKENS + subtoken_strings
+    else:
+      # TODO(dtarlow): or should we fall back to the previous behavior and
+      # insert copies of "" for each reserved count?
+      raise ValueError("Unexpected value for reserved. What is being reserved?")
+
     # we remember the maximum length of any subtoken to avoid having to
     # check arbitrarily long strings.
     self._max_subtoken_len = max([len(s) for s in subtoken_strings])
     self._subtoken_string_to_id = {
-        s: i+reserved for i, s in enumerate(subtoken_strings) if s}
+        s: i + reserved
+        for i, s in enumerate(subtoken_strings) if s
+    }
 
   def _init_alphabet_from_tokens(self, tokens):
     """Initialize alphabet from an iterable of token or subtoken strings."""
@@ -545,7 +640,11 @@ class SubwordTextEncoder(TextEncoder):
     self._alphabet |= _ESCAPE_CHARS
 
   def _load_from_file(self, filename):
-    """Load from a file."""
+    """Load from a file.
+
+    Args:
+      filename: filename to load vocabulary from
+    """
     subtoken_strings = []
     with tf.gfile.Open(filename) as f:
       for line in f:

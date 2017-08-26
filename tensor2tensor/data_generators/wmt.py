@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Data generators for WMT data-sets."""
+"""Data generators for translation data-sets."""
 
 from __future__ import absolute_import
 from __future__ import division
@@ -32,10 +32,6 @@ from tensor2tensor.utils import registry
 
 import tensorflow as tf
 
-tf.flags.DEFINE_string("ende_bpe_path", "", "Path to BPE files in tmp_dir."
-                       "Download from https://drive.google.com/open?"
-                       "id=0B_bZck-ksdkpM25jRUN2X2UxMm8")
-
 FLAGS = tf.flags.FLAGS
 
 
@@ -43,8 +39,8 @@ FLAGS = tf.flags.FLAGS
 EOS = text_encoder.EOS_ID
 
 
-class WMTProblem(problem.Text2TextProblem):
-  """Base class for WMT problems."""
+class TranslateProblem(problem.Text2TextProblem):
+  """Base class for translation problems."""
 
   @property
   def is_character_level(self):
@@ -295,15 +291,15 @@ _ENCS_TEST_DATASETS = [
 # Generators.
 
 
-def _get_wmt_ende_dataset(directory, filename):
+def _get_wmt_ende_bpe_dataset(directory, filename):
   """Extract the WMT en-de corpus `filename` to directory unless it's there."""
   train_path = os.path.join(directory, filename)
   if not (tf.gfile.Exists(train_path + ".de") and
           tf.gfile.Exists(train_path + ".en")):
-    # We expect that this file has been downloaded from:
-    # https://drive.google.com/open?id=0B_bZck-ksdkpM25jRUN2X2UxMm8 and placed
-    # in `directory`.
-    corpus_file = os.path.join(directory, FLAGS.ende_bpe_path)
+    url = ("https://drive.google.com/uc?export=download&id="
+           "0B_bZck-ksdkpM25jRUN2X2UxMm8")
+    corpus_file = generator_utils.maybe_download_from_drive(
+        directory, "wmt16_en_de.tar.gz", url)
     with tarfile.open(corpus_file, "r:gz") as corpus_tar:
       corpus_tar.extractall(directory)
   return train_path
@@ -313,7 +309,7 @@ def ende_bpe_token_generator(data_dir, tmp_dir, train):
   """Instance of token generator for the WMT en->de task, training set."""
   dataset_path = ("train.tok.clean.bpe.32000"
                   if train else "newstest2013.tok.bpe.32000")
-  train_path = _get_wmt_ende_dataset(tmp_dir, dataset_path)
+  train_path = _get_wmt_ende_bpe_dataset(tmp_dir, dataset_path)
   token_tmp_path = os.path.join(tmp_dir, "vocab.bpe.32000")
   token_path = os.path.join(data_dir, "vocab.bpe.32000")
   tf.gfile.Copy(token_tmp_path, token_path, overwrite=True)
@@ -334,6 +330,7 @@ def _preprocess_sgm(line, is_sgm):
   if line.startswith("<p>") or line.startswith("</p>"):
     return ""
   # Strip <seg> tags.
+  line = line.strip()
   if line.startswith("<seg") and line.endswith("</seg>"):
     i = line.index(">")
     return line[i+1:-6]  # Strip first <seg ...> and last </seg>.
@@ -384,15 +381,15 @@ def _compile_data(tmp_dir, datasets, filename):
   return filename
 
 
-@registry.register_problem("wmt_ende_tokens_8k")
-class WMTEnDeTokens8k(WMTProblem):
+@registry.register_problem
+class TranslateEndeWmt8k(TranslateProblem):
   """Problem spec for WMT En-De translation."""
 
   @property
   def targeted_vocab_size(self):
     return 2**13  # 8192
 
-  def train_generator(self, data_dir, tmp_dir, train):
+  def generator(self, data_dir, tmp_dir, train):
     symbolizer_vocab = generator_utils.get_or_generate_vocab(
         data_dir, tmp_dir, self.vocab_file, self.targeted_vocab_size)
     datasets = _ENDE_TRAIN_DATASETS if train else _ENDE_TEST_DATASETS
@@ -410,23 +407,23 @@ class WMTEnDeTokens8k(WMTProblem):
     return problem.SpaceID.DE_TOK
 
 
-@registry.register_problem("wmt_ende_tokens_32k")
-class WMTEnDeTokens32k(WMTEnDeTokens8k):
+@registry.register_problem
+class TranslateEndeWmt32k(TranslateEndeWmt8k):
 
   @property
   def targeted_vocab_size(self):
     return 2**15  # 32768
 
 
-@registry.register_problem("wmt_ende_characters")
-class WMTEnDeCharacters(WMTProblem):
+@registry.register_problem
+class TranslateEndeWmtCharacters(TranslateProblem):
   """Problem spec for WMT En-De translation."""
 
   @property
   def is_character_level(self):
     return True
 
-  def train_generator(self, _, tmp_dir, train):
+  def generator(self, _, tmp_dir, train):
     character_vocab = text_encoder.ByteTextEncoder()
     datasets = _ENDE_TRAIN_DATASETS if train else _ENDE_TEST_DATASETS
     tag = "train" if train else "dev"
@@ -443,29 +440,36 @@ class WMTEnDeCharacters(WMTProblem):
     return problem.SpaceID.DE_CHR
 
 
-@registry.register_problem("wmt_zhen_tokens_8k")
-class WMTZhEnTokens8k(WMTProblem):
+@registry.register_problem
+class TranslateEnzhWmt8k(TranslateProblem):
   """Problem spec for WMT Zh-En translation."""
 
   @property
   def targeted_vocab_size(self):
     return 2**13  # 8192
 
-  def train_generator(self, data_dir, tmp_dir, train):
+  @property
+  def num_shards(self):
+    return 10  # This is a small dataset.
+
+  def generator(self, data_dir, tmp_dir, train):
     source_vocab_size = self.targeted_vocab_size
     target_vocab_size = self.targeted_vocab_size
     datasets = _ZHEN_TRAIN_DATASETS if train else _ZHEN_TEST_DATASETS
     source_datasets = [[item[0], [item[1][0]]] for item in _ZHEN_TRAIN_DATASETS]
     target_datasets = [[item[0], [item[1][1]]] for item in _ZHEN_TRAIN_DATASETS]
     source_vocab = generator_utils.get_or_generate_vocab(
-        data_dir, tmp_dir, "vocab.zh.%d" % source_vocab_size, source_vocab_size,
-        source_datasets)
+        data_dir, tmp_dir, "vocab.zhen-zh.%d" % source_vocab_size,
+        source_vocab_size, source_datasets)
     target_vocab = generator_utils.get_or_generate_vocab(
-        data_dir, tmp_dir, "vocab.en.%d" % target_vocab_size, target_vocab_size,
-        target_datasets)
+        data_dir, tmp_dir, "vocab.zhen-en.%d" % target_vocab_size,
+        target_vocab_size, target_datasets)
     tag = "train" if train else "dev"
     data_path = _compile_data(tmp_dir, datasets, "wmt_zhen_tok_%s" % tag)
-    return bi_vocabs_token_generator(data_path + ".lang1", data_path + ".lang2",
+    # We generate English->X data by convention, to train reverse translation
+    # just add the "_rev" suffix to the problem name, e.g., like this.
+    #   --problems=translate_enzh_wmt8k_rev
+    return bi_vocabs_token_generator(data_path + ".lang2", data_path + ".lang1",
                                      source_vocab, target_vocab, EOS)
 
   @property
@@ -490,23 +494,15 @@ class WMTZhEnTokens8k(WMTProblem):
     }
 
 
-@registry.register_problem("wmt_zhen_tokens_32k")
-class WMTZhEnTokens32k(WMTZhEnTokens8k):
-
-  @property
-  def targeted_vocab_size(self):
-    return 2**15  # 32768
-
-
-@registry.register_problem("wmt_enfr_tokens_8k")
-class WMTEnFrTokens8k(WMTProblem):
+@registry.register_problem
+class TranslateEnfrWmt8k(TranslateProblem):
   """Problem spec for WMT En-Fr translation."""
 
   @property
   def targeted_vocab_size(self):
     return 2**13  # 8192
 
-  def train_generator(self, data_dir, tmp_dir, train):
+  def generator(self, data_dir, tmp_dir, train):
     symbolizer_vocab = generator_utils.get_or_generate_vocab(
         data_dir, tmp_dir, self.vocab_file, self.targeted_vocab_size)
     datasets = _ENFR_TRAIN_DATASETS if train else _ENFR_TEST_DATASETS
@@ -524,23 +520,23 @@ class WMTEnFrTokens8k(WMTProblem):
     return problem.SpaceID.FR_TOK
 
 
-@registry.register_problem("wmt_enfr_tokens_32k")
-class WMTEnFrTokens32k(WMTEnFrTokens8k):
+@registry.register_problem
+class TranslateEnfrWmt32k(TranslateEnfrWmt8k):
 
   @property
   def targeted_vocab_size(self):
     return 2**15  # 32768
 
 
-@registry.register_problem("wmt_enfr_characters")
-class WMTEnFrCharacters(WMTProblem):
+@registry.register_problem
+class TranslateEnfrWmtCharacters(TranslateProblem):
   """Problem spec for WMT En-Fr translation."""
 
   @property
   def is_character_level(self):
     return True
 
-  def train_generator(self, data_dir, tmp_dir, train):
+  def generator(self, data_dir, tmp_dir, train):
     character_vocab = text_encoder.ByteTextEncoder()
     datasets = _ENFR_TRAIN_DATASETS if train else _ENFR_TEST_DATASETS
     tag = "train" if train else "dev"
@@ -557,8 +553,8 @@ class WMTEnFrCharacters(WMTProblem):
     return problem.SpaceID.FR_CHR
 
 
-@registry.register_problem("setimes_mken_tokens_32k")
-class SETimesMkEnTokens32k(WMTProblem):
+@registry.register_problem
+class TranslateEnmkSetimes32k(TranslateProblem):
   """Problem spec for SETimes Mk-En translation."""
 
   @property
@@ -569,7 +565,7 @@ class SETimesMkEnTokens32k(WMTProblem):
   def vocab_name(self):
     return "vocab.mken"
 
-  def train_generator(self, data_dir, tmp_dir, train):
+  def generator(self, data_dir, tmp_dir, train):
     datasets = _MKEN_TRAIN_DATASETS if train else _MKEN_TEST_DATASETS
     source_datasets = [[item[0], [item[1][0]]] for item in datasets]
     target_datasets = [[item[0], [item[1][1]]] for item in datasets]
@@ -578,7 +574,10 @@ class SETimesMkEnTokens32k(WMTProblem):
         source_datasets + target_datasets)
     tag = "train" if train else "dev"
     data_path = _compile_data(tmp_dir, datasets, "setimes_mken_tok_%s" % tag)
-    return token_generator(data_path + ".lang1", data_path + ".lang2",
+    # We generate English->X data by convention, to train reverse translation
+    # just add the "_rev" suffix to the problem name, e.g., like this.
+    #   --problems=translate_enmk_setimes32k_rev
+    return token_generator(data_path + ".lang2", data_path + ".lang1",
                            symbolizer_vocab, EOS)
 
   @property
@@ -590,8 +589,8 @@ class SETimesMkEnTokens32k(WMTProblem):
     return problem.SpaceID.EN_TOK
 
 
-@registry.register_problem("wmt_encs_tokens_32k")
-class WMTEnCsTokens32k(WMTProblem):
+@registry.register_problem
+class TranslateEncsWmt32k(TranslateProblem):
   """Problem spec for WMT English-Czech translation."""
 
   @property
@@ -602,7 +601,7 @@ class WMTEnCsTokens32k(WMTProblem):
   def vocab_name(self):
     return "vocab.encs"
 
-  def train_generator(self, data_dir, tmp_dir, train):
+  def generator(self, data_dir, tmp_dir, train):
     datasets = _ENCS_TRAIN_DATASETS if train else _ENCS_TEST_DATASETS
     source_datasets = [[item[0], [item[1][0]]] for item in datasets]
     target_datasets = [[item[0], [item[1][1]]] for item in datasets]
@@ -623,15 +622,15 @@ class WMTEnCsTokens32k(WMTProblem):
     return problem.SpaceID.CS_TOK
 
 
-@registry.register_problem("wmt_encs_characters")
-class WMTEnCsCharacters(WMTProblem):
+@registry.register_problem
+class TranslateEncsWmtCharacters(TranslateProblem):
   """Problem spec for WMT En-Cs character-based translation."""
 
   @property
   def is_character_level(self):
     return True
 
-  def train_generator(self, data_dir, tmp_dir, train):
+  def generator(self, data_dir, tmp_dir, train):
     character_vocab = text_encoder.ByteTextEncoder()
     datasets = _ENCS_TRAIN_DATASETS if train else _ENCS_TEST_DATASETS
     tag = "train" if train else "dev"
@@ -646,28 +645,6 @@ class WMTEnCsCharacters(WMTProblem):
   @property
   def target_space_id(self):
     return problem.SpaceID.CS_CHR
-
-
-def tabbed_parsing_token_generator(data_dir, tmp_dir, train, prefix,
-                                   source_vocab_size, target_vocab_size):
-  """Generate source and target data from a single file."""
-  source_vocab = generator_utils.get_or_generate_tabbed_vocab(
-      data_dir, tmp_dir, "parsing_train.pairs", 0,
-      prefix + "_source.vocab.%d" % source_vocab_size, source_vocab_size)
-  target_vocab = generator_utils.get_or_generate_tabbed_vocab(
-      data_dir, tmp_dir, "parsing_train.pairs", 1,
-      prefix + "_target.vocab.%d" % target_vocab_size, target_vocab_size)
-  filename = "parsing_%s" % ("train" if train else "dev")
-  pair_filepath = os.path.join(tmp_dir, filename + ".pairs")
-  return tabbed_generator(pair_filepath, source_vocab, target_vocab, EOS)
-
-
-def tabbed_parsing_character_generator(tmp_dir, train):
-  """Generate source and target data from a single file."""
-  character_vocab = text_encoder.ByteTextEncoder()
-  filename = "parsing_%s" % ("train" if train else "dev")
-  pair_filepath = os.path.join(tmp_dir, filename + ".pairs")
-  return tabbed_generator(pair_filepath, character_vocab, character_vocab, EOS)
 
 
 def parsing_token_generator(data_dir, tmp_dir, train, vocab_size):

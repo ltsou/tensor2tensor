@@ -18,7 +18,10 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from collections import defaultdict
+import contextlib
 import math
+import random
 
 # Dependency imports
 
@@ -29,6 +32,7 @@ from tensor2tensor.utils import expert_utils as eu
 import tensorflow as tf
 
 from tensorflow.python.framework import function
+from tensorflow.python.framework import ops
 
 # This is a global setting. When turned off, no @function.Defun is used.
 allow_defun = False
@@ -55,8 +59,15 @@ def hard_tanh(x, saturation_limit=0.9):
 def inverse_exp_decay(max_step, min_value=0.01):
   """Inverse-decay exponentially from 0.01 to 1.0 reached at max_step."""
   inv_base = tf.exp(tf.log(min_value) / float(max_step))
-  step = tf.to_float(tf.contrib.framework.get_global_step())
+  step = tf.to_float(tf.train.get_global_step())
   return inv_base**tf.maximum(float(max_step) - step, 0.0)
+
+
+def inverse_lin_decay(max_step, min_value=0.01):
+  """Inverse-decay linearly from 0.01 to 1.0 reached at max_step."""
+  step = tf.to_float(tf.train.get_global_step())
+  progress = tf.minimum(step / float(max_step), 1.0)
+  return progress * (1.0 - min_value) + min_value
 
 
 def shakeshake2_py(x, y, equal=False, individual=False):
@@ -186,7 +197,7 @@ def embedding(x, vocab_size, dense_size, name=None, reuse=None, multiplier=1.0):
     # On the backwards pass, we want to convert the gradient from
     # an indexed-slices to a regular tensor before sending it back to the
     # parameter server. This avoids excess computation on the parameter server.
-    embedding_var = eu.ConvertGradientToTensor(embedding_var)
+    embedding_var = eu.convert_gradient_to_tensor(embedding_var)
     emb_x = tf.gather(embedding_var, x)
     if multiplier != 1.0:
       emb_x *= multiplier
@@ -352,13 +363,23 @@ def conv_internal(conv_fn, inputs, filters, kernel_size, **kwargs):
   return conv2d_kernel(kernel_size, "single")
 
 
-def conv(inputs, filters, kernel_size, **kwargs):
-  return conv_internal(tf.layers.conv2d, inputs, filters, kernel_size, **kwargs)
+def conv(inputs, filters, kernel_size, dilation_rate=1, **kwargs):
+  return conv_internal(
+      tf.layers.conv2d,
+      inputs,
+      filters,
+      kernel_size,
+      dilation_rate=dilation_rate,
+      **kwargs)
 
 
-def conv1d(inputs, filters, kernel_size, **kwargs):
+def conv1d(inputs, filters, kernel_size, dilation_rate=1, **kwargs):
   return tf.squeeze(
-      conv(tf.expand_dims(inputs, 2), filters, (kernel_size, 1), **kwargs), 2)
+      conv(
+          tf.expand_dims(inputs, 2),
+          filters, (kernel_size, 1),
+          dilation_rate=(dilation_rate, 1),
+          **kwargs), 2)
 
 
 def separable_conv(inputs, filters, kernel_size, **kwargs):
@@ -445,64 +466,134 @@ def layer_norm(x, filters=None, epsilon=1e-6, name=None, reuse=None):
     return result
 
 
-def noam_norm(x, name=None):
+def noam_norm(x, epsilon=1.0, name=None):
   """One version of layer normalization."""
   with tf.name_scope(name, default_name="noam_norm", values=[x]):
     shape = x.get_shape()
     ndims = len(shape)
-    return (tf.nn.l2_normalize(x, ndims - 1, epsilon=1.0) *
+    return (tf.nn.l2_normalize(x, ndims - 1, epsilon=epsilon) *
             tf.sqrt(tf.to_float(shape[-1])))
 
 
-def get_norm(norm_type):
-  """Get the normalizer function."""
+def apply_norm(x, norm_type, depth, epsilon):
+  """Apply Normalization."""
   if norm_type == "layer":
-    return lambda x, name, filters=None, epsilon=1e-6: layer_norm(  # pylint: disable=g-long-lambda
-        x, filters=filters, epsilon=epsilon, name=name)
+    return layer_norm(x, filters=depth, epsilon=epsilon)
   if norm_type == "batch":
-    return tf.layers.batch_normalization
+    return tf.layers.batch_normalization(x, epsilon=epsilon)
   if norm_type == "noam":
-    return noam_norm
+    return noam_norm(x, epsilon)
   if norm_type == "none":
-    return lambda x, name: x
+    return x
   raise ValueError("Parameter normalizer_fn must be one of: 'layer', 'batch',"
                    "'noam', 'none'.")
 
 
-def residual_fn(x,
-                y,
-                norm_type,
-                residual_dropout,
-                filters=None,
-                epsilon=1e-16,
-                name=None,
-                reuse=None):
-  """Returns a function for combining layer input and layer output.
+def layer_prepostprocess(previous_value, x, sequence, dropout_rate, norm_type,
+                         depth, epsilon, name):
+  """Apply a sequence of functions to the input or output of a layer.
 
-  The returned function on x (layer input) and y (layer output) computes:
-    norm_function(x + dropout(y))
+  The sequence is specified as a string which may contain the following
+  characters:
+    a: add previous_value
+    n: apply normalization
+    d: apply dropout
+
+  For example, if sequence=="dna", then the output is
+    previous_value + normalize(dropout(x))
 
   Args:
-    x: tensor, input layer
-    y: tensor, output layer
-    norm_type: string, type of normalizer function
-    residual_dropout: integer, dropout value for residual connection
-    filters: integer, dimension for layer norm, optional
-    epsilon: integer, value of layer norm epsilon
-    name: string, name
-    reuse: bool, whether to reuse
+    previous_value: A Tensor, to be added as a residual connection ('a')
+    x: A Tensor to be transformed.
+    sequence: a string.
+    dropout_rate: a float
+    norm_type: a string (see apply_norm())
+    depth: an integer (size of last dimension of x).
+    epsilon: a float (parameter for normalization)
+    name: a string
 
   Returns:
-    residual layer output with applied norm_fn.
+    a Tensor
   """
-  with tf.variable_scope(
-      name, default_name="residual", values=[x, y], reuse=reuse):
-    norm_fn = get_norm(norm_type)
-    res = x + tf.nn.dropout(y, 1.0 - residual_dropout)
-    if norm_type == "layer":
-      return norm_fn(res, filters=filters, epsilon=epsilon, name=norm_type)
-    else:
-      return norm_fn(res, name=norm_type)
+  with tf.variable_scope(name):
+    if sequence == "none":
+      return x
+    for c in sequence:
+      if c == "a":
+        x += previous_value
+      elif c == "n":
+        x = apply_norm(x, norm_type, depth, epsilon)
+      else:
+        assert c == "d", ("Unknown sequence step %s" % c)
+        x = tf.nn.dropout(x, 1.0 - dropout_rate)
+    return x
+
+
+def layer_preprocess(layer_input, hparams):
+  """Apply layer preprocessing.
+
+  See layer_prepostprocess() for details.
+
+  A hyperparemeters object is passed for convenience.  The hyperparameters
+  that may be used are:
+
+    layer_preprocess_sequence
+    layer_prepostprocess_dropout
+    norm_type
+    hidden_size
+    norm_epsilon
+
+  Args:
+    layer_input: a Tensor
+    hparams: a hyperparameters object.
+
+  Returns:
+    a Tensor
+  """
+  assert "a" not in hparams.layer_preprocess_sequence, (
+      "No residual connections allowed in hparams.layer_preprocess_sequence")
+  return layer_prepostprocess(
+      None,
+      layer_input,
+      sequence=hparams.layer_preprocess_sequence,
+      dropout_rate=hparams.layer_prepostprocess_dropout,
+      norm_type=hparams.norm_type,
+      depth=hparams.hidden_size,
+      epsilon=hparams.norm_epsilon,
+      name="layer_prepostprocess")
+
+
+def layer_postprocess(layer_input, layer_output, hparams):
+  """Apply layer postprocessing.
+
+  See layer_prepostprocess() for details.
+
+  A hyperparemeters object is passed for convenience.  The hyperparameters
+  that may be used are:
+
+    layer_postprocess_sequence
+    layer_prepostprocess_dropout
+    norm_type
+    hidden_size
+    norm_epsilon
+
+  Args:
+    layer_input: a Tensor
+    layer_output: a Tensor
+    hparams: a hyperparameters object.
+
+  Returns:
+    a Tensor
+  """
+  return layer_prepostprocess(
+      layer_input,
+      layer_output,
+      sequence=hparams.layer_postprocess_sequence,
+      dropout_rate=hparams.layer_prepostprocess_dropout,
+      norm_type=hparams.norm_type,
+      depth=hparams.hidden_size,
+      epsilon=hparams.norm_epsilon,
+      name="layer_postprocess")
 
 
 def conv_block_internal(conv_fn,
@@ -732,71 +823,6 @@ def decompress_seqcnn(x,
         hidden_size
     ])
     return tf.layers.dense(outputs, targets_vocab_size)
-
-
-def moe_layer(data_parallelism,
-              ps_devices,
-              xs,
-              train,
-              model_hidden_size,
-              expert_hidden_size,
-              n1,
-              n2,
-              loss_coef,
-              autoscale=True,
-              name=None):
-  """A mixture of experts layer.
-
-  Args:
-    data_parallelism: a expert_utils.Parallelism object.
-    ps_devices: a list of strings
-    xs: a list of input tensors.
-    train: a boolean scalar.
-    model_hidden_size: an integer (input/output size for this layer)
-    expert_hidden_size: an integer (size of each expert's hidden layer)
-    n1: an integer - number of experts (or # of groups for hierarchical MoE)
-    n2: optional integer - size of each group of experts for hierarchical MoE
-    loss_coef: a scalar - multiplier on load-balancing losses
-    autoscale: a boolean
-    name: a string
-
-  Returns:
-    ys: a list of tensors:
-    extra_training_loss: a scalar
-  """
-  dp = data_parallelism
-  with tf.variable_scope(name, default_name="moe"):
-    # Set up the hyperparameters for the gating networks.
-    primary_gating_hp = eu.NoisyTopKGatingParams()
-    primary_gating_hp.num_experts = n1
-    if n2:
-      # hierarchical MoE containing moe_n1 groups of moe_n2 experts.
-      assert n2 > 1
-      secondary_gating_hp = eu.NoisyTopKGatingParams()
-      secondary_gating_hp.num_experts = n2
-    else:
-      # flat mixture of moe_n1 experts.
-      secondary_gating_hp = None
-    # Set up the hyperparameters for the expert networks.
-    # Each expert contains a hidden RELU layer of size filter_size
-    expert_hp = eu.FeedForwardExpertParams()
-    expert_hp.autoscale = autoscale
-    expert_hp.hidden_layer_sizes = [expert_hidden_size]
-    # Create the mixture of experts.
-    moe = eu.DistributedMixtureOfExperts(primary_gating_hp, secondary_gating_hp,
-                                         expert_hp, model_hidden_size,
-                                         model_hidden_size, ps_devices, "moe")
-    # MoE expects input tensors to be 2d.
-    #  Flatten out spatial dimensions.
-    xs_2d = dp(tf.reshape, xs, [[-1, model_hidden_size]] * dp.n)
-    # Call the MoE
-    moe_out_2d, importance, load, _, _ = moe.Eval(
-        dp.devices, xs_2d, train, identifiers=None)
-    # Reshape the output to the original shape.
-    moe_out = dp(tf.reshape, moe_out_2d, dp(tf.shape, xs))
-    # These losses encourage equal load on the different experts.
-    loss = loss_coef * (eu.CVSquared(importance) + eu.CVSquared(load))
-    return moe_out, loss
 
 
 def simple_attention(target, source, bias=None):
@@ -1337,6 +1363,23 @@ def weights_nonzero(labels):
   return tf.to_float(tf.not_equal(labels, 0))
 
 
+def weights_prepend_inputs_to_targets(labels):
+  """Assign weight 1.0 to only the "targets" portion of the labels.
+
+  Weight 1.0 is assigned to all nonzero labels past the first zero.
+  See prepend_mode in common_hparams.py
+
+  Args:
+    labels: A Tensor of int32s.
+
+  Returns:
+    A Tensor of floats.
+  """
+  past_first_zero = tf.cumsum(tf.to_float(tf.equal(labels, 0)), axis=1)
+  nonzero = tf.to_float(labels)
+  return tf.to_float(tf.not_equal(past_first_zero * nonzero, 0))
+
+
 def weights_all(labels):
   """Assign weight 1.0 to all labels."""
   return tf.ones_like(labels, dtype=tf.float32)
@@ -1383,6 +1426,7 @@ def padded_cross_entropy(logits,
 
   Args:
     logits: a `Tensor` with shape `[batch, timesteps, vocab_size]`.
+      optionally a FactoredTensor.
     labels: an integer `Tensor` with shape `[batch, timesteps]`.
     label_smoothing: a floating point `Scalar`.
     weights_fn: A function from labels to weights.
@@ -1392,6 +1436,13 @@ def padded_cross_entropy(logits,
     loss_numerator: a `Scalar`.  Sum of losses.
     loss_denominator: a `Scalar.  The number of non-padding target tokens.
   """
+  if isinstance(logits, FactoredTensor):
+    return padded_cross_entropy_factored(
+        logits,
+        labels,
+        label_smoothing,
+        weights_fn=weights_fn,
+        reduce_sum=reduce_sum)
   confidence = 1.0 - label_smoothing
   vocab_size = tf.shape(logits)[-1]
   with tf.name_scope("padded_cross_entropy", [logits, labels]):
@@ -1584,3 +1635,325 @@ def ravanbakhsh_set_layer(layer_size,
         inputs - tf.expand_dims(global_pool_1d(inputs, mask=mask), axis=1),
         activation_fn=activation_fn,
         name=name)
+
+
+def fn_device_dependency_dict():
+  """State container for fn_device_dependency."""
+  if not hasattr(tf.get_default_graph(), "dependency_dict"):
+    setattr(tf.get_default_graph(), "dependency_dict", defaultdict(list))
+  return tf.get_default_graph().dependency_dict
+
+
+@contextlib.contextmanager
+def fn_device_dependency(name, device=""):
+  """Add control deps for name and device."""
+  key = name + "_" + device
+  outs = []
+
+  def body():
+    with tf.control_dependencies(fn_device_dependency_dict()[key]):
+      yield outs
+      assert outs
+
+      deps = outs
+      if isinstance(outs[0], list) or isinstance(outs[0], tuple):
+        assert len(outs) == 1
+        deps = outs[0]
+      fn_device_dependency_dict()[key] = deps
+
+  if device:
+    with tf.device(device):
+      return body()
+  else:
+    return body()
+
+
+def underlying_variable_ref(t):
+  """Find the underlying variable ref, ignoring Identity ops.
+
+  Args:
+    t: a Tensor
+
+  Returns:
+    a Tensor that is a variable ref, or None on error.
+  """
+  while t.op.type == "Identity":
+    t = t.op.inputs[0]
+  if "Variable" in t.op.type:
+    return t
+  else:
+    return None
+
+
+def underlying_variable(t):
+  """Find the underlying tf.Variable object.
+
+  Args:
+    t: a Tensor
+
+  Returns:
+    a tf.Varaible object.
+  """
+  t = underlying_variable_ref(t)
+  assert t is not None
+  # make sure that the graph has a variable index and that it is up-to-date
+  if not hasattr(tf.get_default_graph(), "var_index"):
+    tf.get_default_graph().var_index = {}
+  var_index = tf.get_default_graph().var_index
+  for v in tf.global_variables()[len(var_index):]:
+    var_index[v.name] = v
+  return var_index[t.name]
+
+
+def approximate_split(x, num_splits, axis=0):
+  """Split approximately equally into num_splits parts.
+
+  Args:
+    x: a Tensor
+    num_splits: an integer
+    axis: an integer.
+
+  Returns:
+    a list of num_splits Tensors.
+  """
+  size = tf.shape(x)[axis]
+  size_splits = [tf.div(size + i, num_splits) for i in xrange(num_splits)]
+  return tf.split(x, size_splits, axis=axis)
+
+
+class FactoredTensor(object):
+  """A concise factored representation of Tensor as two tensors.
+
+  This class represents the tensor tf.matmul(a, b, transpose_b=True)
+  by storing the values of Tensors a and b.
+
+  The reason for this is that the product may be too big to fully realize at
+  once, so it can be realized a part at a time.
+
+  "a" may have extra leading dimensions, in which case they are flattened out
+  before computing the matrix product, then re-expanded afterwards.
+  """
+
+  def __init__(self, a, b):
+    self._a = a
+    self._b = b
+
+  @property
+  def a(self):
+    return self._a
+
+  @property
+  def b(self):
+    return self._b
+
+  def to_tensor(self):
+    inner_dim = tf.shape(self.b)[1]
+    result_dim = tf.shape(self.b)[0]
+    flat_a = tf.reshape(self.a, [-1, inner_dim])
+    product = tf.matmul(flat_a, self.b, transpose_b=True)
+    product_shape = tf.concat([tf.shape(self.a)[:-1], [result_dim]], 0)
+    product = tf.reshape(product, product_shape)
+    product.set_shape(self.a.get_shape().as_list()[:-1] +
+                      [self.b.get_shape()[0]])
+    return product
+
+
+def _convert_factored_tensor_to_tensor(value, *args, **kwargs):
+  # call ops.convert_to_tensor to handle optional arguments appropriately
+  return ops.internal_convert_to_tensor(value.to_tensor(), *args, **kwargs)
+
+
+tf.register_tensor_conversion_function(FactoredTensor,
+                                       _convert_factored_tensor_to_tensor)
+
+
+def smoothing_cross_entropy_factored_grad(op, dy):
+  """Gradient function for smoothing_cross_entropy_factored."""
+  a = op.inputs[0]
+  b = op.inputs[1]
+  labels = op.inputs[2]
+  confidence = op.inputs[3]
+  num_splits = 32
+  vocab_size = tf.shape(b)[0]
+  labels = approximate_split(labels, num_splits)
+  a = approximate_split(a, num_splits)
+  dy = approximate_split(dy, num_splits)
+  b_grad = None
+  a_grad_parts = []
+  deps = []
+  for part in xrange(num_splits):
+    with tf.control_dependencies(deps):
+      logits = tf.matmul(a[part], b, transpose_b=True)
+      output_part = smoothing_cross_entropy(logits, labels[part], vocab_size,
+                                            confidence)
+      a_grad_part, b_grad_part = tf.gradients(
+          ys=[output_part], xs=[a[part], b], grad_ys=[dy[part]])
+      a_grad_parts.append(a_grad_part)
+      if part > 0:
+        b_grad += b_grad_part
+      else:
+        b_grad = b_grad_part
+      deps = [b_grad, a_grad_part]
+  a_grad = tf.concat(a_grad_parts, 0)
+  return a_grad, b_grad, None, None
+
+
+@function.Defun(
+    noinline=True,
+    python_grad_func=smoothing_cross_entropy_factored_grad,
+    compiled=True,
+    separate_compiled_gradients=True)
+def smoothing_cross_entropy_factored(a, b, labels, confidence):
+  """Memory-efficient computation of smoothing cross-entropy.
+
+  Avoids realizing the entire logits matrix at once.
+
+  Args:
+    a: a Tensor with shape [batch, inner_dim]
+    b: a Tensor with shape [vocab_size, inner_dim]
+    labels: an integer Tensor with shape [batch]
+    confidence: a float
+
+  Returns:
+    A Tensor with shape [batch]
+  """
+  num_splits = 32
+  vocab_size = tf.shape(b)[0]
+  labels = approximate_split(labels, num_splits)
+  a = approximate_split(a, num_splits)
+  parts = []
+  for part in xrange(num_splits):
+    with tf.control_dependencies(parts[-1:]):
+      logits = tf.matmul(a[part], b, transpose_b=True)
+      parts.append(
+          smoothing_cross_entropy(logits, labels[part], vocab_size, confidence))
+  return tf.concat(parts, 0)
+
+
+def padded_cross_entropy_factored(factored_logits,
+                                  labels,
+                                  label_smoothing,
+                                  weights_fn=weights_nonzero,
+                                  reduce_sum=True):
+  """Memory-efficient computation of smoothing cross-entropy.
+
+  Avoids realizing the entire logits matrix at once.
+
+  Args:
+    factored_logits: a `FactoredTensor` representing a Tensor
+       with shape `[batch, timesteps, vocab_size]`.
+    labels: an integer `Tensor` with shape `[batch, timesteps]`.
+    label_smoothing: a floating point `Scalar`.
+    weights_fn: A function from labels to weights.
+    reduce_sum: a Boolean, whether to sum at the end or not.
+
+  Returns:
+    loss_numerator: a `Scalar`.  Sum of losses.
+    loss_denominator: a `Scalar.  The number of non-padding target tokens.
+  """
+  a = factored_logits.a
+  b = factored_logits.b
+  confidence = 1.0 - label_smoothing
+  with tf.name_scope("padded_cross_entropy_factored", [a, b, labels]):
+    labels_flat = tf.reshape(labels, [-1])
+    a_flat = tf.reshape(a, [-1, tf.shape(b)[1]])
+    xent = smoothing_cross_entropy_factored(a_flat, b, labels_flat,
+                                            tf.convert_to_tensor(confidence))
+    xent = tf.reshape(xent, tf.shape(labels))
+    weights = weights_fn(labels)
+    if not reduce_sum:
+      return xent * weights, weights
+    return tf.reduce_sum(xent * weights), tf.reduce_sum(weights)
+
+
+def fn_with_custom_grad(grad_fn, use_global_vars=False):
+  """Decorator to create a subgraph with a custom gradient function.
+
+  The subgraph created by the decorated function is NOT put in a Defun and so
+  does not suffer from the limitations of the Defun (all subgraph ops on the
+  same device, no summaries).
+
+  Args:
+    grad_fn: function with signature
+      (inputs, variables, outputs, output_grads) -> (grad_inputs, grad_vars),
+      all of which are lists of Tensors.
+    use_global_vars: if True, variables will be the global variables created.
+      If False, will be the trainable variables.
+
+  Returns:
+    Decorator for function such that the gradient is defined by grad_fn.
+  """
+
+  def dec(fn):
+
+    def wrapped(*args):
+      return _fn_with_custom_grad(
+          fn, args, grad_fn, use_global_vars=use_global_vars)
+
+    return wrapped
+
+  return dec
+
+
+def _fn_with_custom_grad(fn, inputs, grad_fn, use_global_vars=False):
+  """Create a subgraph with a custom gradient.
+
+  Args:
+    fn: function that takes inputs as arguments and produces 1 or more Tensors.
+    inputs: list<Tensor>, will be passed as fn(*inputs).
+    grad_fn: function with signature
+      (inputs, vars, outputs, output_grads) -> (grad_inputs, grad_vars),
+      all of which are lists of Tensors.
+    use_global_vars: if True, variables will be the global variables created.
+      If False, will be the trainable variables.
+
+  Returns:
+    fn(*inputs)
+  """
+  with tf.variable_scope(None, default_name="fn_with_custom_grad") as vs:
+    inputs = list(inputs)
+    outputs = fn(*inputs)
+    if use_global_vars:
+      train_vars = list(vs.global_variables())
+    else:
+      train_vars = list(vs.trainable_variables())
+
+  if grad_fn is None:
+    return outputs
+  else:
+    if not (isinstance(outputs, tuple) or isinstance(outputs, list)):
+      outputs = [outputs]
+    outputs = list(outputs)
+
+    in_types = [t.dtype for t in inputs]
+    out_types = [t.dtype for t in outputs]
+    var_types = [t.dtype for t in train_vars]
+
+    def custom_grad_fn(op, *dys):
+      """Custom grad fn applying grad_fn for identity Defun."""
+      dys = list(dys)
+      fn_inputs = op.inputs[:len(inputs)]
+      fn_vars = op.inputs[len(inputs):len(inputs) + len(train_vars)]
+      fn_outputs = op.inputs[len(inputs) + len(train_vars):]
+      assert len(fn_outputs) == len(outputs)
+      assert len(fn_outputs) == len(dys)
+
+      grad_inputs, grad_vars = grad_fn(fn_inputs, fn_vars, fn_outputs, dys)
+      grad_outputs = [None] * len(fn_outputs)
+      return tuple(grad_inputs + grad_vars + grad_outputs)
+
+    # The Defun takes as input the original inputs, the trainable variables
+    # created in fn, and the outputs. In the forward it passes through the
+    # outputs. In the backwards, it produces gradients for the original inputs
+    # and the trainable variables.
+    @function.Defun(
+        *(in_types + var_types + out_types),
+        func_name="identity_custom_grad%d" % random.randint(1, 10**9),
+        python_grad_func=custom_grad_fn,
+        shape_func=lambda _: [t.get_shape() for t in outputs])
+    def identity(*args):
+      outs = args[len(inputs) + len(train_vars):]
+      return tuple([tf.identity(t) for t in outs])
+
+    id_out = identity(*(inputs + train_vars + outputs))
+    return id_out

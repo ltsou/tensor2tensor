@@ -68,9 +68,35 @@ def basic_params1():
       learning_rate=0.1,
       sampling_method="argmax",  # "argmax" or "random"
       problem_choice="adaptive",  # "uniform", "adaptive", "distributed"
+      # expand the logits a piece at a time - saves memory.
+      factored_logits=int(False),
       multiply_embedding_mode="sqrt_depth",
-      norm_type="none",  # "batch", layer", "noam", "none".
-      layer_norm_epsilon=1e-6,
+      # Parameters related to mixtures of experts.
+      moe_hidden_sizes="2048",  # hidden layer sizes (comma-separated)
+      moe_num_experts=64,  # number of experts per layer
+      moe_k=2,  # how many experts to use for each batch element
+      moe_loss_coef=1e-2,
+      # Sequences of operations to perform on layer input and layer output.
+      # Used by common_layers.layer_preprocess, common_layers.layer_postprocess
+      # Each character repsesnts an operation:
+      # none: no preprocessing
+      #    d: apply dropout
+      #    n: apply normalization (see norm_type and norm_epsilon)
+      #    a: add layer input (residual connection - only during postprocess)
+      # The special string "none" is used instead of the empty string
+      # to indicate no pre/postprocesisng, since the empty string causes
+      # trouble for hyperparameter tuning.
+      # TODO(noam): The current settings ("", "dan") are the published version
+      # of the transformer.  ("n", "da") seems better for harder-to-learn
+      # models, so it should probably be the default.
+      layer_preprocess_sequence="none",
+      layer_postprocess_sequence="dan",
+      # dropout rate to use during layer_preprocess and layer_postprocess
+      layer_prepostprocess_dropout=0.1,
+      # What type of normalization to use
+      norm_type="layer",  # "batch", layer", "noam", "none".
+      # epsilon parameter to normalization function
+      norm_epsilon=1e-6,
       symbol_modality_num_shards=16,
       # setting the max length in a minibatch. 0 means default behavior,
       # max_length = hparams.batch_size * length_multiplier
@@ -103,7 +129,26 @@ def basic_params1():
       # mean there is no maximum or truncation.
       # You can change this behavior by overridding preprocess_examples() method
       # in your problem class.
-      max_target_seq_length=0)
+      max_target_seq_length=0,
+      # This flag allows us to optionally treat a seq-to-seq problem
+      # as a language model.  Legal values are:
+      #
+      # "none" - Do not prepend the inputs to the targets.
+      # "prepend_inputs_masked_attention"
+      #     replace "targets" in preprocessing with
+      #     tf.concat([inputs, [0], targets], axis=1)
+      #     i.e. we prepend the inputs to the targets with a single
+      #     padding token in between.  Use masked self-attention on the
+      #     entire resulting sequence.  During training, we compute losses on
+      #     the combined sequence.  During eval, we compute the metrics
+      #     on only the targets portion.
+      # "prepend_inputs_full_attention"
+      #     similar to the previous option except that each
+      #     position in the inputs portion can see the
+      #     entire inputs portion.  This removes the challenge of
+      #     autoregressively predicting the inputs portion.
+      prepend_mode="none",
+  )
 
 
 class RangedHParams(object):

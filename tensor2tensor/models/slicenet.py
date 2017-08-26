@@ -111,7 +111,10 @@ def multi_conv_res(x, padding, name, layers, hparams, mask=None, source=None):
           hparams.separability - i
           for i in reversed(range(len(dilations_and_kernels2)))
       ]
-    norm_fn = common_layers.get_norm(hparams.norm_type)
+    def norm_fn(x, name):
+      with tf.variable_scope(name, default_name="norm"):
+        return common_layers.apply_norm(
+            x, hparams.norm_type, hparams.hidden_size, hparams.norm_epsilon)
     for layer in xrange(layers):
       with tf.variable_scope("layer_%d" % layer):
         y = common_layers.subseparable_conv_block(
@@ -171,7 +174,10 @@ def similarity_cost(inputs_encoded, targets_encoded):
 
 def slicenet_middle(inputs_encoded, targets, target_space_emb, mask, hparams):
   """Middle part of slicenet, connecting encoder and decoder."""
-  norm_fn = common_layers.get_norm(hparams.norm_type)
+  def norm_fn(x, name):
+    with tf.variable_scope(name, default_name="norm"):
+      return common_layers.apply_norm(
+          x, hparams.norm_type, hparams.hidden_size, hparams.norm_epsilon)
 
   # Flatten targets and embed target_space_id.
   targets_flat = tf.expand_dims(common_layers.flatten4d3d(targets), axis=2)
@@ -316,9 +322,6 @@ def slicenet_params1():
   # A kernel scheme, one of _KERNEL_SCHEMES; overrides large_kernel_size.
   hparams.add_hparam("kernel_scheme", "3.7.15.31")
   hparams.add_hparam("audio_compression", 8)
-  hparams.add_hparam("moe_n1", 32)
-  hparams.add_hparam("moe_n2", 0)
-  hparams.add_hparam("moe_loss_coef", 1e-2)
   # attention-related flags
   hparams.add_hparam("attention_type", "simple")
   hparams.add_hparam("num_heads", 8)
@@ -352,7 +355,6 @@ def slicenet_params1_tiny():
   hparams.separability = 0
   hparams.hidden_size = 128
   hparams.num_hidden_layers = 2
-  hparams.moe_n1 = 2
   hparams.batch_size = 512
   hparams.learning_rate_warmup_steps = 200
   return hparams

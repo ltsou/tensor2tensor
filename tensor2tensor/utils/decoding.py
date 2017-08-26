@@ -45,13 +45,13 @@ def decode_from_dataset(estimator):
     tf.logging.info("Performing local inference.")
     infer_problems_data = data_reader.get_data_filepatterns(
         FLAGS.problems, hparams.data_dir, tf.contrib.learn.ModeKeys.INFER)
+
     infer_input_fn = input_fn_builder.build_input_fn(
         mode=tf.contrib.learn.ModeKeys.INFER,
         hparams=hparams,
         data_file_patterns=infer_problems_data,
         num_datashards=devices.data_parallelism().n,
         fixed_problem=i)
-    result_iter = estimator.predict(input_fn=infer_input_fn, as_iterable=False)
 
     def log_fn(inputs,
                targets,
@@ -66,36 +66,56 @@ def decode_from_dataset(estimator):
                                  "%s_prediction_%d.jpg" % (problem, j))
         show_and_save_image(inputs / 255., save_path)
       elif inputs_vocab:
-        decoded_inputs = inputs_vocab.decode(_save_until_eos(inputs.flatten()))
+        decoded_inputs = inputs_vocab.decode(
+            _save_until_eos(inputs.flatten()))
         tf.logging.info("Inference results INPUT: %s" % decoded_inputs)
 
-      decoded_outputs = targets_vocab.decode(_save_until_eos(outputs.flatten()))
+      if FLAGS.identity_output:
+        decoded_outputs = " ".join(map(str, outputs.flatten()))
+        decoded_targets = " ".join(map(str, targets.flatten()))
+      else:
+        decoded_outputs = " ".join(map(
+            str, targets_vocab.decode(_save_until_eos(outputs.flatten()))))
+        decoded_targets = " ".join(map(
+            str, targets_vocab.decode(_save_until_eos(targets.flatten()))))
+
       tf.logging.info("Inference results OUTPUT: %s" % decoded_outputs)
-      decoded_targets = targets_vocab.decode(_save_until_eos(targets.flatten()))
       tf.logging.info("Inference results TARGET: %s" % decoded_targets)
+      return decoded_outputs, decoded_targets
 
-      if FLAGS.decode_to_file:
-        output_filepath = FLAGS.decode_to_file + ".outputs." + problem
-        output_file = tf.gfile.Open(output_filepath, "a")
-        output_file.write(decoded_outputs + "\n")
-        target_filepath = FLAGS.decode_to_file + ".targets." + problem
-        target_file = tf.gfile.Open(target_filepath, "a")
-        target_file.write(decoded_targets + "\n")
-
-    # The function predict() returns an iterable over the network's
-    # predictions from the test input. We use it to log inputs and decodes.
-    inputs_iter = result_iter["inputs"]
-    targets_iter = result_iter["targets"]
-    outputs_iter = result_iter["outputs"]
-    for j, result in enumerate(zip(inputs_iter, targets_iter, outputs_iter)):
-      inputs, targets, outputs = result
+    result_iter = estimator.predict(input_fn=infer_input_fn, as_iterable=True)
+    count = 0
+    agg_outputs = []
+    agg_targets = []
+    for result in result_iter:
+      # predictions from the test input. We use it to log inputs and decodes.
+      inputs = result["inputs"]
+      targets = result["targets"]
+      outputs = result["outputs"]
       if FLAGS.decode_return_beams:
         output_beams = np.split(outputs, FLAGS.decode_beam_size, axis=0)
         for k, beam in enumerate(output_beams):
           tf.logging.info("BEAM %d:" % k)
-          log_fn(inputs, targets, beam, problem, j)
+          o, t = log_fn(inputs, targets, beam, problem, count)
+          agg_outputs.append(o)
+          agg_targets.append(t)
       else:
-        log_fn(inputs, targets, outputs, problem, j)
+        o, t = log_fn(inputs, targets, outputs, problem, count)
+        agg_outputs.append(o)
+        agg_targets.append(t)
+
+      count += 1
+      if FLAGS.decode_num_samples != -1 and count >= FLAGS.decode_num_samples:
+        break
+    if FLAGS.decode_to_file:
+      output_filepath = FLAGS.decode_to_file + ".outputs." + problem
+      output_file = tf.gfile.Open(output_filepath, "w")
+      target_filepath = FLAGS.decode_to_file + ".targets." + problem
+      target_file = tf.gfile.Open(target_filepath, "w")
+      for o, t in zip(agg_outputs, agg_targets):
+        output_file.write(str(o)+"\n")
+        target_file.write(str(t)+"\n")
+    tf.logging.info("Completed inference on %d samples." % count)
 
 
 def decode_from_file(estimator, filename):
@@ -248,6 +268,11 @@ def _interactive_input_fn(hparams):
   vocabulary = p_hparams.vocabulary["inputs" if has_input else "targets"]
   # This should be longer than the longest input.
   const_array_size = 10000
+  # Import readline if available for command line editing and recall.
+  try:
+    import readline  # pylint: disable=g-import-not-at-top,unused-variable
+  except ImportError:
+    pass
   while True:
     prompt = ("INTERACTIVE MODE  num_samples=%d  decode_length=%d  \n"
               "  it=<input_type>     ('text' or 'image' or 'label')\n"
@@ -255,7 +280,7 @@ def _interactive_input_fn(hparams):
               "  in=<input_problem>  (set the input problem number)\n"
               "  ou=<output_problem> (set the output problem number)\n"
               "  ns=<num_samples>    (changes number of samples)\n"
-              "  dl=<decode_length>  (changes decode legnth)\n"
+              "  dl=<decode_length>  (changes decode length)\n"
               "  <%s>                (decode)\n"
               "  q                   (quit)\n"
               ">" % (num_samples, decode_length, "source_string"
