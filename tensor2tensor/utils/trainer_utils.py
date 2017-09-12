@@ -37,6 +37,7 @@ from tensor2tensor.utils import devices
 from tensor2tensor.utils import input_fn_builder
 from tensor2tensor.utils import model_builder
 from tensor2tensor.utils import registry
+from tensor2tensor.utils import metrics
 
 import tensorflow as tf
 from tensorflow.contrib.learn.python.learn import learn_runner
@@ -233,6 +234,8 @@ def create_experiment(output_dir, data_dir, model_name, train_steps,
       output_dir=output_dir,
       data_dir=data_dir,
       model_name=model_name)
+  eval_metrics = metrics.create_evaluation_metrics(
+    zip(FLAGS.problems.split("-"), hparams.problem_instances), hparams)
   train_monitors = []
   eval_hooks = []
   if FLAGS.tfdbg:
