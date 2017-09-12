@@ -40,9 +40,6 @@ def problem_hparams(problem_name, model_hparams):
 
   Returns:
     a tf.contrib.training.HParams
-
-  Raises:
-    ValueError: if problem_name is unknown.
   """
   base_name, was_reversed, was_copy = parse_problem_name(problem_name)
   p = _lookup_problem_hparams_fn(base_name)(model_hparams)
@@ -78,7 +75,7 @@ def _lookup_problem_hparams_fn(name):
   if name not in PROBLEM_HPARAMS_MAP:
     map_str = "* " + "\n* ".join(sorted(PROBLEM_HPARAMS_MAP.keys()))
     error_msg = "%s not in the supported set of problems:\n%s" % (name, map_str)
-    raise ValueError(error_msg)
+    raise LookupError(error_msg)
   return PROBLEM_HPARAMS_MAP.get(name)
 
 
@@ -352,18 +349,6 @@ def wsj_parsing_tokens(model_hparams, prefix, wrong_source_vocab_size,
   return p
 
 
-def img2img_imagenet(unused_model_hparams):
-  """Image 2 Image for imagenet dataset."""
-  p = default_problem_hparams()
-  p.input_modality = {"inputs": ("image:identity", None)}
-  p.target_modality = ("image:identity", None)
-  p.batch_size_multiplier = 256
-  p.max_expected_batch_size_per_shard = 4
-  p.input_space_id = 1
-  p.target_space_id = 1
-  return p
-
-
 # Dictionary of named hyperparameter settings for various problems.
 # This is only accessed through the problem_hparams function below.
 PROBLEM_HPARAMS_MAP = {
@@ -380,6 +365,4 @@ PROBLEM_HPARAMS_MAP = {
     "parsing_english_ptb16k":
         lambda p: wsj_parsing_tokens(  # pylint: disable=g-long-lambda
             p, "wsj", 2**14, 2**9),
-    "img2img_imagenet":
-        img2img_imagenet,
 }
