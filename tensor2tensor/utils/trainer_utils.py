@@ -254,7 +254,7 @@ def create_experiment(output_dir, data_dir, model_name, train_steps,
     logging.info("Selected target metric: %s" % stopping_metric_name)
     train_monitors.append(SaveBestCheckpointsMonitor(
       input_fn=input_fns["eval"], eval_steps=eval_steps,
-      metrics=eval_metrics, every_n_steps=FLAGS.local_eval_frequency,
+      every_n_steps=FLAGS.local_eval_frequency,
       name=None, hooks=eval_hooks,
       early_stopping_metric=stopping_metric_name,
       early_stopping_metric_minimize=False,
