@@ -1,6 +1,6 @@
 **Note**: This fork differs from the main branch of the [tensor2tensor library](https://github.com/tensorflow/tensor2tensor) in the following ways:
-* Adds the `--target_metric` option to store the checkpoints with the best dev set score so far separatedly.
-* Tested with [SGNMT](http://ucam-smt.github.io/sgnmt/html/). More recent version of tensor2tensor may also work.
+* Adds the `--target_metric` option to store the checkpoints with the best dev set score so far.
+* Tested with the latest version of [SGNMT](http://ucam-smt.github.io/sgnmt/html/).
 
 # T2T: Tensor2Tensor Transformers
 
