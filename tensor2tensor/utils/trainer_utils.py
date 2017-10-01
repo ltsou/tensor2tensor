@@ -79,7 +79,7 @@ flags.DEFINE_string("target_metric", "approx_bleu_score", "Metric which is "
 flags.DEFINE_bool("eval_run_autoregressive", False,
                   "Run eval autoregressively where we condition on previous"
                   "generated output instead of the actual target.")
-flags.DEFINE_integer("keep_checkpoint_max", 20,
+flags.DEFINE_integer("keep_checkpoint_max", 10,
                      "How many recent checkpoints to keep.")
 flags.DEFINE_bool("experimental_optimize_placement", False,
                   "Optimize ops placement with experimental session options.")
