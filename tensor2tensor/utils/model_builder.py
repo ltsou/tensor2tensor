@@ -36,6 +36,7 @@ from tensor2tensor.utils import input_fn_builder
 from tensor2tensor.utils import metrics
 from tensor2tensor.utils import registry
 from tensor2tensor.utils import yellowfin
+from tensor2tensor.utils import largebatch_optimizer
 
 import tensorflow as tf
 from tensorflow.python.framework import dtypes
@@ -362,6 +363,13 @@ class _ConditionalOptimizer(tf.train.Optimizer):
           beta1=hparams.optimizer_adam_beta1,
           beta2=hparams.optimizer_adam_beta2,
           epsilon=hparams.optimizer_adam_epsilon)
+    elif optimizer_name == "LargebatchAdam":
+      self._opt = largebatch_optimizer.LargebatchAdamOptimizer(
+          lr / 500.0,
+          beta1=hparams.optimizer_adam_beta1,
+          beta2=hparams.optimizer_adam_beta2,
+          epsilon=hparams.optimizer_adam_epsilon,
+          n=hparams.batch_size_multiplier)
     elif optimizer_name == "Momentum":
       self._opt = tf.train.MomentumOptimizer(
           lr, momentum=hparams.optimizer_momentum_momentum)
