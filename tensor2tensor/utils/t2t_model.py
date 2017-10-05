@@ -468,6 +468,8 @@ class T2TModel(object):
 
     for key, input_modality in six.iteritems(
         self._problem_hparams.input_modality):
+      # Allows later access to pre-embedding raw inputs.
+      transformed_features["raw_%s" % key] = sharded_features[key]
       previous_modalities = [
           self._hparams.problems[i].input_modality[key].name
           for i in xrange(self._problem_idx)

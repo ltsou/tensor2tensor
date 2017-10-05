@@ -442,6 +442,14 @@ def learning_rate_decay(hparams, num_worker_replicas=1, num_train_steps=1):
   warmup_steps = tf.to_float(
       hparams.learning_rate_warmup_steps * num_worker_replicas)
   step = tf.to_float(tf.train.get_or_create_global_step())
+  try:
+    if hparams.batch_size_multiplier > 1:
+      batch_size_multiplier = tf.constant(hparams.batch_size_multiplier,
+                                          dtype=tf.float32)
+      warmup_steps = warmup_steps * batch_size_multiplier
+      step = step / batch_size_multiplier
+  except AttributeError:
+    pass
   if hparams.learning_rate_decay_scheme == "noam":
     return 5000.0 * hparams.hidden_size**-0.5 * tf.minimum(
         (step + 1) * warmup_steps**-1.5, (step + 1)**-0.5)
