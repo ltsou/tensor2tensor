@@ -369,7 +369,7 @@ class _ConditionalOptimizer(tf.train.Optimizer):
           beta1=hparams.optimizer_adam_beta1,
           beta2=hparams.optimizer_adam_beta2,
           epsilon=hparams.optimizer_adam_epsilon,
-          n=hparams.batch_size_multiplier)
+          n=hparams.fake_gpu_multiplier)
     elif optimizer_name == "Momentum":
       self._opt = tf.train.MomentumOptimizer(
           lr, momentum=hparams.optimizer_momentum_momentum)
@@ -443,11 +443,12 @@ def learning_rate_decay(hparams, num_worker_replicas=1, num_train_steps=1):
       hparams.learning_rate_warmup_steps * num_worker_replicas)
   step = tf.to_float(tf.train.get_or_create_global_step())
   try:
-    if hparams.batch_size_multiplier > 1:
-      batch_size_multiplier = tf.constant(hparams.batch_size_multiplier,
-                                          dtype=tf.float32)
-      warmup_steps = warmup_steps * batch_size_multiplier
-      step = step / batch_size_multiplier
+    if hparams.fake_gpu_multiplier > 1:
+      tf.logging.info("Scaling down learning rate decay by "
+                      "fake_gpu_multiplier=%d" % hparams.fake_gpu_multiplier)
+      fake_gpu_multiplier = tf.constant(hparams.fake_gpu_multiplier,
+                                        dtype=tf.float32)
+      step = step / fake_gpu_multiplier
   except AttributeError:
     pass
   if hparams.learning_rate_decay_scheme == "noam":

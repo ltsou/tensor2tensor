@@ -1,7 +1,7 @@
 **Note**: This fork differs from the main branch of the [tensor2tensor library](https://github.com/tensorflow/tensor2tensor) in the following ways:
-* Implementation of the LargebatchAdam optimizer for using very large batch sizes on limited GPU memory.
+* Implementation of the *LargebatchAdam* optimizer for using very large batch sizes on limited GPU memory (see `hparams.fake_gpu_multiplier`).
 * Adds the `--target_metric` option to store the checkpoints with the best dev set score so far.
-* Allow access to pre-embedding inputs and targets from `model\_fn()` (see `features["raw_?"]`)
+* Allow access to pre-embedding inputs and targets from `model_fn()` (see `features["raw_*"]`)
 * Tested with the latest version of [SGNMT](http://ucam-smt.github.io/sgnmt/html/).
 
 # T2T: Tensor2Tensor Transformers
