@@ -2,6 +2,8 @@
 * Implementation of the *LargebatchAdam* optimizer for using very large batch sizes on limited GPU memory (see `hparams.fake_gpu_multiplier`).
 * Adds the `--target_metric` option to store the checkpoints with the best dev set score so far.
 * Allow access to pre-embedding inputs and targets from `model_fn()` (see `features["raw_*"]`)
+* Problems can create a `loss_mask` feature to limit the loss computation to certain positions.
+* Allow setting the shuffle queue size in training explicitly (see `hparams.shuffle_queue_size`)
 * Tested with the latest version of [SGNMT](http://ucam-smt.github.io/sgnmt/html/).
 
 # T2T: Tensor2Tensor Transformers

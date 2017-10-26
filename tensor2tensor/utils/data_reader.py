@@ -244,6 +244,7 @@ def _batching_scheme(batch_size,
                      drop_long_sequences=False,
                      shard_multiplier=1,
                      length_multiplier=1,
+                     shuffle_queue_size=None,
                      min_length=0):
   """A batching scheme based on model hyperparameters.
 
@@ -263,6 +264,7 @@ def _batching_scheme(batch_size,
       across datashards.
     length_multiplier: an integer multiplier that is used to increase the
       batch sizes and sequence length tolerance.
+    shuffle_queue_size: int, size of the shuffle queue buffer.
     min_length: int, sequences shorter than this will be skipped.
 
   Returns:
@@ -312,7 +314,8 @@ def _batching_scheme(batch_size,
   # using a queue which must be several times as large as the maximum
   # number of batches per window.
   max_batches_per_window = window_size // min(batch_sizes)
-  shuffle_queue_size = max_batches_per_window * 3
+  if shuffle_queue_size is None:
+    shuffle_queue_size = max_batches_per_window * 3
 
   ret = {
       "boundaries": boundaries,
@@ -331,6 +334,10 @@ def hparams_to_batching_scheme(hparams,
                                shard_multiplier=1,
                                length_multiplier=1):
   """Wrapper around _batching_scheme with hparams."""
+  try:
+    shuffle_queue_size = hparams.shuffle_queue_size
+  except:
+    shuffle_queue_size = None
   return _batching_scheme(
       batch_size=hparams.batch_size,
       min_length=hparams.min_length,
@@ -339,6 +346,7 @@ def hparams_to_batching_scheme(hparams,
       length_bucket_step=hparams.length_bucket_step,
       drop_long_sequences=drop_long_sequences,
       shard_multiplier=shard_multiplier,
+      shuffle_queue_size=shuffle_queue_size,
       length_multiplier=length_multiplier)
 
 

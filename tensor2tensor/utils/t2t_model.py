@@ -527,8 +527,8 @@ class T2TModel(object):
       if not last_position_only:
         sharded_logits = target_modality.top_sharded(
             body_outputs, sharded_features["targets"], dp)
-        training_loss = target_modality.loss_sharded(
-            sharded_logits, sharded_features["targets"], dp)
+        training_loss = _get_training_loss(
+            target_modality, sharded_logits, sharded_features, dp)
 
         training_loss *= self._problem_hparams.loss_multiplier
       else:
@@ -585,8 +585,8 @@ class T2TModel(object):
           with tf.variable_scope(target_modality.name):
             new_sharded_logits = target_modality.top_sharded(
                 body_outputs, sharded_features["targets"], dp)
-            training_loss = target_modality.loss_sharded(
-                sharded_logits, sharded_features["targets"], dp)
+            training_loss = _get_training_loss(
+                target_modality, sharded_logits, sharded_features, dp)
             training_loss *= self._problem_hparams.loss_multiplier
           losses["training"] = training_loss
         return new_sharded_logits, losses
@@ -658,6 +658,14 @@ class T2TModel(object):
   @property
   def hparams(self):
     return self._hparams
+
+
+def _get_training_loss(target_modality, logits, features, dp):
+  if "loss_mask" in features:
+    targets = [t*m for t, m in zip(features["targets"], features["loss_mask"])]
+  else:
+    targets = features["targets"]
+  return target_modality.loss_sharded(logits, targets, dp)
 
 
 def _warn_changed_modality_type(new_name, old_name, feature_name):
