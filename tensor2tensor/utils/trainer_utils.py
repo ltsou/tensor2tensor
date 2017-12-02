@@ -290,7 +290,8 @@ def create_experiment(data_dir, model_name, train_steps, eval_steps, hparams,
     ]
   if FLAGS.local_eval_frequency:
     eval_metrics = metrics.create_evaluation_metrics(
-      zip(FLAGS.problems.split("-"), hparams.problem_instances), hparams)
+        hparams.problem_instances, hparams)
+
     stopping_metric_name = None
     for metric_name in eval_metrics:
       if metric_name.endswith("/%s" % FLAGS.target_metric):
