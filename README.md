@@ -4,6 +4,7 @@
 * Allow access to *all* pre-embedding inputs and targets from `model_fn()` (see `features["raw_*"]`)
 * Problems can create a `loss_mask` feature to limit the loss computation to certain positions.
 * Allow setting the shuffle queue size in training explicitly (see `hparams.shuffle_queue_size`)
+* Allows explicitly disabling caching devices which can be useful for distributed training with `tf.dynamic_rnn` (see `hparams.no_caching_devices`)
 * Tested with the latest version of [SGNMT](http://ucam-smt.github.io/sgnmt/html/).
 
 # T2T: Tensor2Tensor Transformers
