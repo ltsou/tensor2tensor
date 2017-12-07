@@ -327,6 +327,8 @@ def hparams_to_batching_scheme(hparams,
   """Wrapper around _batching_scheme with hparams."""
   try:
     shuffle_queue_size = hparams.shuffle_queue_size
+    tf.logging.info(
+        "Explicitly setting shuffle_queue_size to %d" % shuffle_queue_size)
   except:
     shuffle_queue_size = None
   return _batching_scheme(

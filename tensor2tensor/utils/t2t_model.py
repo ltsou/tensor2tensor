@@ -935,6 +935,7 @@ class T2TModel(base.Layer):
 
 def _get_training_loss(target_modality, logits, features, dp):
   if "loss_mask" in features:
+    tf.logging.info("Applying loss mask")
     targets = [t*m for t, m in zip(features["targets"], features["loss_mask"])]
   else:
     targets = features["targets"]
