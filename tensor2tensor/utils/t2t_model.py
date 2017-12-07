@@ -559,8 +559,6 @@ class T2TModel(base.Layer):
 
     for key, input_modality in six.iteritems(
         self._problem_hparams.input_modality):
-      # Allows later access to pre-embedding raw inputs.
-      transformed_features["raw_%s" % key] = sharded_features[key]
       previous_modalities = [
           self.hparams.problems[i].input_modality[key].name
           for i in xrange(self._problem_idx)
@@ -598,8 +596,6 @@ class T2TModel(base.Layer):
 
     # Allows later access to pre-embedding raw targets.
     transformed_features["targets_raw"] = sharded_features["targets"]
-    # Backward compatibility
-    transformed_features["raw_targets"] = sharded_features["targets"]
 
     # Construct the model body.
     with tf.variable_scope("body", reuse=self._problem_idx > 0):

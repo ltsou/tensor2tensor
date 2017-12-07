@@ -101,7 +101,7 @@ flags.DEFINE_bool("eval_run_autoregressive", False,
                   "generated output instead of the actual target.")
 flags.DEFINE_bool("eval_use_test_set", False,
                   "Whether to use the '-test' data for EVAL (and PREDICT).")
-flags.DEFINE_integer("keep_checkpoint_max", 10,
+flags.DEFINE_integer("keep_checkpoint_max", 20,
                      "How many recent checkpoints to keep.")
 flags.DEFINE_bool("experimental_optimize_placement", False,
                   "Optimize ops placement with experimental session options.")
@@ -314,7 +314,6 @@ def create_experiment(data_dir, model_name, train_steps, eval_steps, hparams,
       eval_input_fn=input_fns[tf.estimator.ModeKeys.EVAL],
       train_steps=train_steps,
       eval_steps=eval_steps,
-      min_eval_frequency=0,  # Validation is done in SaveBestCheckpointsMonitor
       train_monitors=train_monitors,
       eval_hooks=eval_hooks,
       train_steps_per_iteration=FLAGS.local_eval_frequency,
