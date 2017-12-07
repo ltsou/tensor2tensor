@@ -36,6 +36,7 @@ LOG=$LOG_DIR/log.run-t2t
 # Train options
 NUM_CKPT=${NUM_CKPT:-20}
 SAVE_NPZ=${SAVE_NPZ:-0}
+VAR_PREFIX=${VAR_PREFIX:-transformer}
 TRAINER_FLAGS=${TRAINER_FLAGS:-""}
 
 # Decode options
@@ -115,6 +116,9 @@ else
     additional_flags=''
     if [ $SAVE_NPZ -eq 1 ]; then
         additional_flags="$additional_flags --save_npz"
+    fi
+    if [ ! -z "$VAR_PREFIX" ]; then
+        additional_flags="$additional_flags --var_prefix $VAR_PREFIX"
     fi
 
     SECONDS=0

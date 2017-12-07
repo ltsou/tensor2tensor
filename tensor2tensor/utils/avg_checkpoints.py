@@ -40,6 +40,8 @@ flags.DEFINE_string("prefix", "",
 flags.DEFINE_string("output_path", "/tmp/averaged.ckpt",
                     "Path to output the averaged checkpoint to.")
 flags.DEFINE_boolean("save_npz", False, "Save model in npz format")
+flags.DEFINE_string("var_prefix", "",
+                    "Prefixes of variables to included when saving npz model. Comma separated.")
 
 
 def checkpoint_exists(path):
@@ -112,18 +114,18 @@ def main(_):
       sess.run(assign_op, {p: value})
 
     if FLAGS.save_npz:
-        save_npz(sess, FLAGS.output_path)
+        prefix_to_include = FLAGS.var_prefix.split(",")
+        save_npz(sess, FLAGS.output_path, prefix_to_include)
     else:
         # Use the built saver to save the averaged checkpoint.
         saver.save(sess, FLAGS.output_path, global_step=global_step)
 
   tf.logging.info("Averaged checkpoints saved in %s", FLAGS.output_path)
 
-def save_npz(sess, output_path):
+def save_npz(sess, output_path, prefix_to_include):
     # Reference: /home/ehasler/code/tensorflow_rebase_r0.12_gpu/_python/tensorflow/models/rnn/translate/utils/model_utils.py
 
     # Get parameters
-    prefix_to_include = [ "body" ] # TODO: should we include "symbol_modality"?
     tmp = {}
     with sess.as_default():
         for v in tf.global_variables():
