@@ -19,11 +19,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import copy
-import math
-import operator
 import os
-import re
 import sys
 
 # Dependency imports
@@ -36,15 +32,11 @@ from tensor2tensor.utils import devices
 from tensor2tensor.utils import input_fn_builder
 from tensor2tensor.utils import model_builder
 from tensor2tensor.utils import registry
-from tensor2tensor.utils import metrics
 
 import tensorflow as tf
 from tensorflow.contrib.learn.python.learn import learn_runner
 from tensorflow.core.protobuf import rewriter_config_pb2
 from tensorflow.python import debug
-from tensorflow.contrib.learn.python.learn import monitors
-from tensorflow.python.platform import tf_logging as logging
-from tensorflow.python.training import saver as saver_lib
 
 flags = tf.flags
 FLAGS = flags.FLAGS
@@ -79,10 +71,6 @@ except:  # pylint: disable=bare-except
 
 flags.DEFINE_integer("train_steps", 250000,
                      "The number of steps to run training for.")
-flags.DEFINE_string("target_metric", "approx_bleu_score", "Metric which is "
-                    "used to select the models to store in train_dir/best: "
-                    "accuracy_per_sequence, accuracy_top5, accuracy, "
-                    "neg_log_perplexity, approx_bleu_score.")
 flags.DEFINE_string("eval_early_stopping_metric", "loss",
                     "If --schedule=train_and_evaluate and "
                     "--eval_early_stopping_steps is not None, then stop when "
@@ -139,92 +127,6 @@ flags.DEFINE_string(
     "decode_hparams", "",
     "Comma-separated list of name=value pairs to control decode behavior. "
     "See decoding.decode_hparams for defaults.")
-
-
-class SaveBestCheckpointsMonitor(monitors.ValidationMonitor):
-
-  def _scan_best_dir(self, best_dir):
-    existing_checkpoints = []
-    for file_name in tf.gfile.Glob("%s/model.ckpt-*.index" % best_dir):
-      match = re.search(r"score([.0-9]+).index$", file_name)
-      if match:
-        existing_checkpoints.append((float(match.group(1)), file_name[:-6]))
-      else:
-        logging.info("Checkpoint %s did not match pattern." % file_name)
-    return existing_checkpoints
-
-  def _copy_checkpoint(self, src, trg):
-    logging.info("Create new best checkpoint file: %s" % trg)
-    for src_file in tf.gfile.Glob("%s.*" % src):
-      ext = os.path.splitext(src_file)[1]
-      tf.gfile.Copy(src_file, "%s%s" % (trg, ext))
-
-  def _remove_checkpoint(self, path):
-    logging.info("Remove from best checkpoint dir: %s" % path)
-    for file_path in tf.gfile.Glob("%s.*" % path):
-      tf.gfile.Remove(file_path)
-
-  def _rebuild_checkpoint_file(self, path, checkpoints):
-    logging.info("Rebuild checkpoint file with %d entries: %s"
-      % (len(checkpoints), path))
-    prefix = "%s/" % os.path.dirname(path)
-    l = len(prefix)
-    paths = [p[l:] if p.startswith(prefix) else p for p in checkpoints]
-    with tf.gfile.Open(path, "w") as f:
-      f.write('model_checkpoint_path: "%s"\n' % paths[-1])
-      for checkpoint_path in paths:
-        f.write('all_model_checkpoint_paths: "%s"\n' % checkpoint_path)
-
-  def every_n_step_end(self, step, outputs):
-    # TODO(mdan): The use of step below is probably misleading.
-    # The code should probably use the step from the checkpoint, because
-    # that's what is being evaluated.
-    if self._estimator is None:
-      raise ValueError("Missing call to set_estimator.")
-    # Check that we are not running evaluation on the same checkpoint.
-    latest_path = saver_lib.latest_checkpoint(self._estimator.model_dir)
-    if latest_path is None:
-      logging.debug("Skipping evaluation since model has not been saved yet "
-                    "at step %d.", step)
-      return False
-    if latest_path is not None and latest_path == self._latest_path:
-      logging.debug("Skipping evaluation due to same checkpoint %s for step %d "
-                    "as for step %d.", latest_path, step,
-                    self._latest_path_step)
-      return False
-    self._latest_path = latest_path
-    self._latest_path_step = step
-
-    # Run evaluation and log it.
-    validation_outputs = self._evaluate_estimator()
-    stats = []
-    for name in validation_outputs:
-      stats.append("%s = %s" % (name, str(validation_outputs[name])))
-    logging.info("Validation (step %d): %s", step, ", ".join(stats))
-
-    # Store best checkpoints logic
-    best_dir = "%s/best" % os.path.dirname(latest_path)
-    tf.gfile.MakeDirs(best_dir)
-    current_best_checkpoints = self._scan_best_dir(best_dir)
-    current_best_checkpoints.append(
-      (validation_outputs[self.early_stopping_metric], None))
-    current_best_checkpoints.sort(key=operator.itemgetter(0),
-                                  reverse=self.early_stopping_metric_minimize)
-    new_best_paths = []
-    rebuild_checkpoint_file = False
-    for score, path in current_best_checkpoints[-self.early_stopping_rounds:]:
-      if path is None:  # This is the new checkpoint
-        rebuild_checkpoint_file = True
-        path = "%s/model.ckpt-%d_score%.4f" % (best_dir, step, score)
-        self._copy_checkpoint(latest_path, path)
-      new_best_paths.append(path)
-    for _, path in current_best_checkpoints[:-self.early_stopping_rounds]:
-      if path is not None:
-        rebuild_checkpoint_file = True
-        self._remove_checkpoint(path)
-    if rebuild_checkpoint_file:
-      self._rebuild_checkpoint_file("%s/checkpoint" % best_dir,
-                                    new_best_paths)
 
 
 def make_experiment_fn(data_dir, model_name, train_steps, eval_steps):
@@ -287,26 +189,6 @@ def create_experiment(data_dir, model_name, train_steps, eval_steps, hparams,
     optional_kwargs["export_strategies"] = [
         make_export_strategy(problem, hparams)
     ]
-  if FLAGS.local_eval_frequency:
-    eval_metrics = metrics.create_evaluation_metrics(
-        hparams.problem_instances, hparams)
-
-    stopping_metric_name = None
-    for metric_name in eval_metrics:
-      if metric_name.endswith("/%s" % FLAGS.target_metric):
-        stopping_metric_name = metric_name
-        break
-    if stopping_metric_name is None:
-      raise ValueError("--target_metric did not match any known metric.")
-    logging.info("Selected target metric: %s" % stopping_metric_name)
-    train_monitors.append(SaveBestCheckpointsMonitor(
-      input_fn=input_fns["eval"], eval_steps=eval_steps,
-      every_n_steps=FLAGS.local_eval_frequency,
-      name=None, hooks=eval_hooks,
-      early_stopping_metric=stopping_metric_name,
-      early_stopping_metric_minimize=False,
-      early_stopping_rounds=FLAGS.keep_checkpoint_max
-    ))
 
   return tf.contrib.learn.Experiment(
       estimator=estimator,
