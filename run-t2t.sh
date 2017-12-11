@@ -20,7 +20,7 @@ WORKDIR=${1:-/home/centos/workspace/t2t_workspace}
 RAW_DATA_DIR=${2:-/home/centos/data}
 VOCAB_SIZE=${3:-50000}
 TRAIN_STEPS=${4:-250000} # Default 250000
-PROBLEM=${5:-translate_generic} # or translate_generic_bpe
+PROBLEM=${5:-translate_generic} # or translate_generic_existing_vocab
 MODEL=${6:-transformer}
 HPARAMS=${7:-transformer_base_single_gpu}
 
@@ -38,6 +38,7 @@ NUM_CKPT=${NUM_CKPT:-20}
 SAVE_NPZ=${SAVE_NPZ:-0}
 VAR_PREFIX=${VAR_PREFIX:-transformer}
 TRAINER_FLAGS=${TRAINER_FLAGS:-""}
+PREV_MODEL=${PREV_MODEL:-""}
 
 # Decode options
 DECODE_FILE=${DECODE_FILE:-$RAW_DATA_DIR/test/test.src} # decode will only be performed if this file exists
@@ -45,6 +46,19 @@ BEAM_SIZE=${BEAM_SIZE:-4}
 ALPHA=${ALPHA:-0.6}
 
 mkdir -p $LOG_DIR
+
+# get number of gpu
+ngpu=`nvidia-smi --query-gpu=gpu_name --format=csv,noheader | wc -l`
+if [[ $HPARAMS = transformer_base* || $HPARAMS = transformer_big* ]]; then
+    if [[ $ngpu -eq 1 && $HPARAMS != *_single_gpu ]]; then
+        HPARAMS=${HPARAMS}_single_gpu
+    elif [[ $ngpu -gt 1 ]]; then
+        TRAINER_FLAGS="$TRAINER_FLAGS --schedule=train"
+        if [[ $HPARAMS == *_single_gpu ]]; then
+            HPARAMS=${HPARAMS%"_single_gpu"}
+        fi
+    fi
+fi
 
 function displaytime {
   local T=$1
@@ -75,7 +89,7 @@ mkdir -p $DATA_DIR $TMP_DIR $TRAIN_DIR $OUTPUT_DIR
 #    SECONDS=0
 #    logMessage "START preparing data..."
 #    python $T2T_BIN/t2t-datagen \
-#        --vocab_size=$VOCAB_SIZE \
+#        --targeted_vocab_size=$VOCAB_SIZE \
 #        --raw_data_dir=$RAW_DATA_DIR \
 #        --data_dir=$DATA_DIR \
 #        --tmp_dir=$TMP_DIR \
@@ -87,8 +101,16 @@ mkdir -p $DATA_DIR $TMP_DIR $TRAIN_DIR $OUTPUT_DIR
 if ls $TRAIN_DIR/model.ckpt-$TRAIN_STEPS.* 1> /dev/null 2>&1; then
     logMessage "SKIPPING training. Checkpoint for step $TRAIN_STEPS already exists."
 else
-    # get number of gpu
-    ngpu=`nvidia-smi --query-gpu=gpu_name --format=csv,noheader | wc -l`
+    # Need to specify a targeted vocab size if doing "translate_generic"
+    if [ $HPARAMS = translate_generic ]; then
+        TRAINER_FLAGS="$TRAINER_FLAGS --targeted_vocab_size=$VOCAB_SIZE"
+    fi
+
+    # Copy over previous model if exists
+    if [ -d "$PREV_MODEL" ]; then
+        cp -r $PREV_MODEL/* $TRAIN_DIR
+    fi
+
     SECONDS=0
     logMessage "START training... to step: $TRAIN_STEPS"
     set +e
@@ -96,7 +118,6 @@ else
         --generate_data \
         --raw_data_dir=$RAW_DATA_DIR \
         --tmp_dir=$TMP_DIR \
-        --vocab_size=$VOCAB_SIZE \
         --train_steps=$TRAIN_STEPS \
         --data_dir=$DATA_DIR \
         --problems=$PROBLEM \
@@ -104,7 +125,7 @@ else
         --hparams_set=$HPARAMS \
         --worker_gpu=$ngpu \
         --output_dir=$TRAIN_DIR \
-        --keep_checkpoint_max=$NUM_CKPT \
+        --keep_checkpoint_max=$NUM_CKPT $TRAINER_FLAGS \
         >> $LOG_DIR/log.t2t-trainer.out 2>> $LOG_DIR/log.t2t-trainer.err
     set -e
     logMessage "END training, elapsed time: $SECONDS seconds (`displaytime $SECONDS`)"
@@ -114,12 +135,6 @@ if ls $OUTPUT_DIR/averaged.ckpt-* 1> /dev/null 2>&1; then
     logMessage "SKIPPING averaging. Averaged checkpoint already exists."
 else
     additional_flags=''
-    if [ $SAVE_NPZ -eq 1 ]; then
-        additional_flags="$additional_flags --save_npz"
-    fi
-    if [ ! -z "$VAR_PREFIX" ]; then
-        additional_flags="$additional_flags --var_prefix $VAR_PREFIX"
-    fi
 
     SECONDS=0
     logMessage "START Averaging latest checkpoints..."
@@ -129,6 +144,21 @@ else
         --output_path $OUTPUT_DIR/averaged.ckpt \
         $additional_flags \
         >> $LOG_DIR/log.avg_checkpoints.out 2>> $LOG_DIR/log.avg_checkpoints.err 
+
+    # For now, save both ckpt and npz if SAVE_NPZ is on
+    if [ $SAVE_NPZ -eq 1 ]; then
+        additional_flags="$additional_flags --save_npz"
+        if [ ! -z "$VAR_PREFIX" ]; then
+            additional_flags="$additional_flags --var_prefix $VAR_PREFIX"
+        fi
+        python $T2T_HOME/tensor2tensor/utils/avg_checkpoints.py \
+            --prefix $TRAIN_DIR/ \
+            --num_last_checkpoints $NUM_CKPT \
+            --output_path $OUTPUT_DIR/averaged.ckpt \
+            $additional_flags \
+            >> $LOG_DIR/log.avg_checkpoints.out 2>> $LOG_DIR/log.avg_checkpoints.err 
+    fi
+
     logMessage "END averaging, elapsed time: $SECONDS seconds (`displaytime $SECONDS`)"
 fi
 
