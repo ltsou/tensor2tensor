@@ -61,7 +61,9 @@ def _compile_data(tmp_dir, datasets, filename):
   return filename
 
 def copyVocab(orig_path, target_path):
+    # Add <pad> (idx:0), <EOS> (idx:1) and UNK (last) to vocab
     with tf.gfile.GFile(target_path, mode="w") as f:
+        f.write("<pad>\n<EOS>\n");
         with tf.gfile.Open(orig_path) as origF:
             for line in origF:
                 tokens = line.strip().split("\t")

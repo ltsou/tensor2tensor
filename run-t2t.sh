@@ -164,7 +164,8 @@ fi
 
 logMessage "TRAINING HAS BEEN FINISHED"
 
-if [[ -f $DECODE_FILE && $SAVE_NPZ -ne 1 ]]; then
+# Decode test file
+if [[ -f $DECODE_FILE ]]; then
     DECODE_FILE_OUT_PATH=$OUTPUT_DIR/$(basename "$DECODE_FILE").out
     run_decode=1
     # if output file already exists, check if it has the correct number of lines
