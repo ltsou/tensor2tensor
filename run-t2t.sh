@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Usage: run-t2t.sh <workdir> <raw_data_dir> <vocab_size> <train_steps> <problem> <model> <hparams>
+# Usage: run-t2t.sh <workdir> <raw_data_dir> <train_steps> <problem> <model> <hparams>
 
 # NOTE:
 # 1. See what problems, models, and hyperparameter sets are available
@@ -18,11 +18,10 @@
 
 WORKDIR=${1:-/home/centos/workspace/t2t_workspace}
 RAW_DATA_DIR=${2:-/home/centos/data}
-VOCAB_SIZE=${3:-50000}
-TRAIN_STEPS=${4:-250000} # Default 250000
-PROBLEM=${5:-translate_generic} # or translate_generic_existing_vocab
-MODEL=${6:-transformer}
-HPARAMS=${7:-transformer_base_single_gpu}
+TRAIN_STEPS=${3:-250000} # Default 250000
+PROBLEM=${4:-translate_generic} # or translate_generic_existing_vocab
+MODEL=${5:-transformer}
+HPARAMS=${6:-transformer_base_single_gpu}
 
 T2T_HOME=${T2T_HOME:-/home/centos/tools/tensor2tensor}
 T2T_BIN=$T2T_HOME/tensor2tensor/bin
@@ -34,6 +33,7 @@ LOG_DIR=$WORKDIR/log
 LOG=$LOG_DIR/log.run-t2t
 
 # Train options
+VOCAB_SIZE=${VOCAB_SIZE:-50000}
 NUM_CKPT=${NUM_CKPT:-20}
 SAVE_NPZ=${SAVE_NPZ:-0}
 VAR_PREFIX=${VAR_PREFIX:-transformer}
@@ -182,7 +182,6 @@ if [[ -f $DECODE_FILE ]]; then
         SECONDS=0
         logMessage "Start decoding... $DECODE_FILE"
         python $T2T_BIN/t2t-decoder \
-          --vocab_size=$VOCAB_SIZE \
           --data_dir=$DATA_DIR \
           --problems=$PROBLEM \
           --model=$MODEL \
