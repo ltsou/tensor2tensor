@@ -81,7 +81,7 @@ class LargebatchAdamOptimizer(tf.contrib.opt.LazyAdamOptimizer):
     def apply_adam(grad_acc, apply_fn, grad, var, *args, **kwargs):
       total_grad = (grad_acc + grad) / math_ops.cast(self._n_t, 
                                                      grad.dtype.base_dtype)
-      adam_op = apply_fn(grad, var, *args, **kwargs)
+      adam_op = apply_fn(total_grad, var, *args, **kwargs)
       with ops.control_dependencies([adam_op]):
         grad_acc_to_zero_op = grad_acc.assign(grad_acc * 0.0,
                                               use_locking=self._use_locking)
