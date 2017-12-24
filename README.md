@@ -1,6 +1,4 @@
 **Note**: This fork differs from the main branch of the [tensor2tensor library](https://github.com/tensorflow/tensor2tensor) in the following ways:
-* Implementation of the *LargebatchAdam* optimizer for using very large batch sizes on limited GPU memory (see `hparams.fake_gpu_multiplier`).
-* Adds the `--target_metric` option to store the checkpoints with the best dev set score so far.
 * Problems can create a `loss_mask` feature to limit the loss computation to certain positions.
 * Allow explicitly disabling caching devices which can be useful for distributed training with `tf.dynamic_rnn` (see `hparams.no_caching_devices`)
 * Tested with the latest version of [SGNMT](http://ucam-smt.github.io/sgnmt/html/).
