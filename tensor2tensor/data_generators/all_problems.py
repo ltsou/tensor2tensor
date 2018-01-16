@@ -34,6 +34,7 @@ from tensor2tensor.data_generators import ptb
 from tensor2tensor.data_generators import snli
 from tensor2tensor.data_generators import wiki
 from tensor2tensor.data_generators import wmt
+from tensor2tensor.data_generators import translate_generic
 from tensor2tensor.data_generators import wsj_parsing
 
 

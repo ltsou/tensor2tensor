@@ -39,6 +39,9 @@ flags.DEFINE_string("prefix", "",
                     "Prefix (e.g., directory) to append to each checkpoint.")
 flags.DEFINE_string("output_path", "/tmp/averaged.ckpt",
                     "Path to output the averaged checkpoint to.")
+flags.DEFINE_boolean("save_npz", False, "Save model in npz format")
+flags.DEFINE_string("var_prefix", "",
+                    "Prefixes of variables to included when saving npz model. Comma separated.")
 
 
 def checkpoint_exists(path):
@@ -109,11 +112,41 @@ def main(_):
     for p, assign_op, (name, value) in zip(placeholders, assign_ops,
                                            six.iteritems(var_values)):
       sess.run(assign_op, {p: value})
-    # Use the built saver to save the averaged checkpoint.
-    saver.save(sess, FLAGS.output_path, global_step=global_step)
+
+    if FLAGS.save_npz:
+        prefix_to_include = FLAGS.var_prefix.split(",")
+        save_npz(sess, FLAGS.output_path, prefix_to_include)
+    else:
+        # Use the built saver to save the averaged checkpoint.
+        saver.save(sess, FLAGS.output_path, global_step=global_step)
 
   tf.logging.info("Averaged checkpoints saved in %s", FLAGS.output_path)
 
+def save_npz(sess, output_path, prefix_to_include):
+    # Reference: /home/ehasler/code/tensorflow_rebase_r0.12_gpu/_python/tensorflow/models/rnn/translate/utils/model_utils.py
+
+    # Get parameters
+    tmp = {}
+    with sess.as_default():
+        for v in tf.global_variables():
+            for prefix in prefix_to_include:
+                if v.op.name.startswith(prefix):
+                    tmp[v.op.name] = v.eval()
+    #exclude = [ variable_prefix+"/Variable", variable_prefix+"/Variable_1" ]
+    #tmp = { v.op.name: v.eval() for v in tf.global_variables() if v.op.name not in exclude }
+
+    # Rename keys
+    params = {name.replace("/", "-"): param for name, param in tmp.items()}
+
+    # Save parameters
+    tf.logging.info("Save model to path=%s.npz" % output_path)
+    np.savez(output_path, **params)
+
+    # Save keys (Is this step needed?)
+    key_path = output_path + ".npz.keys"
+    with open(key_path, "w") as key_file:
+        for key in sorted(params.keys()):
+            print ((key, params[key].shape), file=key_file)
 
 if __name__ == "__main__":
   tf.app.run()

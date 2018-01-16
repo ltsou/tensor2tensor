@@ -81,6 +81,8 @@ flags.DEFINE_integer("save_checkpoints_secs", 0,
                      " decide, which is currently set to 600 = 10 minutes.")
 flags.DEFINE_bool("log_device_placement", False,
                   "Whether to log device placement.")
+flags.DEFINE_integer("targeted_vocab_size", 2**15, "Targeted vocab size. "
+                     "Only useful when generating new vocab files.")
 
 # Distributed training flags
 flags.DEFINE_integer("local_eval_frequency", 2000,
