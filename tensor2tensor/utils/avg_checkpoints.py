@@ -19,6 +19,7 @@ from __future__ import division
 from __future__ import print_function
 
 import os
+import re
 
 # Dependency imports
 
@@ -137,6 +138,7 @@ def save_npz(sess, output_path, prefix_to_include):
 
     # Rename keys
     params = {name.replace("/", "-"): param for name, param in tmp.items()}
+    params = {re.sub("symbol_modality_\d+_\d+-", "symbol_modality-", name): param for name, param in params.items()}
 
     # Save parameters
     tf.logging.info("Save model to path=%s.npz" % output_path)
