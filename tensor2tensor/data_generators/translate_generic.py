@@ -109,9 +109,9 @@ def _compile_data(tmp_dir, datasets, filename):
   return filename
 
 def copyVocab(orig_path, target_path):
-    # Add <unk> (idx:0), <pad> (idx:1) and <EOS> (idx:2) to vocab
+    # Add <pad> (idx:0), <EOS> (idx:1) and <unk> (idx:2) to vocab
     with tf.gfile.GFile(target_path, mode="w") as f:
-        f.write("<unk>\n<pad>\n<EOS>\n");
+        f.write("<pad>\n<EOS>\n<unk>\n");
         with tf.gfile.Open(orig_path) as origF:
             for line in origF:
                 tokens = line.strip().split("\t")
