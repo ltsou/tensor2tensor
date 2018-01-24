@@ -102,7 +102,7 @@ if ls $TRAIN_DIR/model.ckpt-$TRAIN_STEPS.* 1> /dev/null 2>&1; then
     logMessage "SKIPPING training. Checkpoint for step $TRAIN_STEPS already exists."
 else
     # Need to specify a targeted vocab size if doing "translate_generic"
-    if [ $HPARAMS = translate_generic ]; then
+    if [ $PROBLEM = translate_generic ]; then
         TRAINER_FLAGS="$TRAINER_FLAGS --targeted_vocab_size=$VOCAB_SIZE"
     fi
 
