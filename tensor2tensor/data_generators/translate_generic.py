@@ -61,9 +61,9 @@ def _compile_data(tmp_dir, datasets, filename):
   return filename
 
 def copyVocab(orig_path, target_path):
-    # Add <pad> (idx:0), <EOS> (idx:1) and UNK (last) to vocab
+    # Add <pad> (idx:0), <EOS> (idx:1) and <unk> (idx:2) to vocab
     with tf.gfile.GFile(target_path, mode="w") as f:
-        f.write("<pad>\n<EOS>\n");
+        f.write("<pad>\n<EOS>\n<unk>\n");
         with tf.gfile.Open(orig_path) as origF:
             for line in origF:
                 tokens = line.strip().split("\t")
@@ -72,7 +72,6 @@ def copyVocab(orig_path, target_path):
                     f.write("%s\n" % tokens[1])
                 else:
                     f.write("%s\n" % tokens[0])
-        f.write("UNK\n")  # Add UNK to the vocab.
 
 @registry.register_problem
 class TranslateGeneric(translate.TranslateProblem):
@@ -149,8 +148,8 @@ class TranslateGenericExistingVocab(translate.TranslateProblem):
   def feature_encoders(self, data_dir):
     source_vocab_filename = os.path.join(data_dir, self.source_vocab_name)
     target_vocab_filename = os.path.join(data_dir, self.target_vocab_name)
-    source_encoder = text_encoder.TokenTextEncoder(source_vocab_filename, replace_oov="UNK")
-    target_encoder = text_encoder.TokenTextEncoder(target_vocab_filename, replace_oov="UNK")
+    source_encoder = text_encoder.TokenTextEncoder(source_vocab_filename, replace_oov="<unk>")
+    target_encoder = text_encoder.TokenTextEncoder(target_vocab_filename, replace_oov="<unk>")
     return {"inputs": source_encoder, "targets": target_encoder}
 
   def generator(self, data_dir, tmp_dir, train):
@@ -166,8 +165,8 @@ class TranslateGenericExistingVocab(translate.TranslateProblem):
         os.remove(target_vocab_path)
     copyVocab(os.path.join(FLAGS.raw_data_dir, _VOCABS[0]), source_vocab_path)
     copyVocab(os.path.join(FLAGS.raw_data_dir, _VOCABS[1]), target_vocab_path)
-    source_token_vocab = text_encoder.TokenTextEncoder(source_vocab_path, replace_oov="UNK")
-    target_token_vocab = text_encoder.TokenTextEncoder(target_vocab_path, replace_oov="UNK")
+    source_token_vocab = text_encoder.TokenTextEncoder(source_vocab_path, replace_oov="<unk>")
+    target_token_vocab = text_encoder.TokenTextEncoder(target_vocab_path, replace_oov="<unk>")
     tag = "train" if train else "dev"
     data_path = _compile_data(tmp_dir, datasets, "generic_tok_%s" % tag)
     return translate.bi_vocabs_token_generator(data_path + ".src", data_path + ".trg",

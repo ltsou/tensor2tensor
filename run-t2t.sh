@@ -114,19 +114,20 @@ else
     SECONDS=0
     logMessage "START training... to step: $TRAIN_STEPS"
     set +e
-    python $T2T_BIN/t2t-trainer\
-        --generate_data \
-        --raw_data_dir=$RAW_DATA_DIR \
-        --tmp_dir=$TMP_DIR \
-        --train_steps=$TRAIN_STEPS \
-        --data_dir=$DATA_DIR \
-        --problems=$PROBLEM \
-        --model=$MODEL \
-        --hparams_set=$HPARAMS \
-        --worker_gpu=$ngpu \
-        --output_dir=$TRAIN_DIR \
-        --keep_checkpoint_max=$NUM_CKPT $TRAINER_FLAGS \
-        >> $LOG_DIR/log.t2t-trainer.out 2>> $LOG_DIR/log.t2t-trainer.err
+    cmd="python $T2T_BIN/t2t-trainer
+      --generate_data
+      --raw_data_dir=$RAW_DATA_DIR
+      --tmp_dir=$TMP_DIR
+      --train_steps=$TRAIN_STEPS
+      --data_dir=$DATA_DIR
+      --problems=$PROBLEM
+      --model=$MODEL
+      --hparams_set=$HPARAMS
+      --worker_gpu=$ngpu
+      --output_dir=$TRAIN_DIR
+      --keep_checkpoint_max=$NUM_CKPT $TRAINER_FLAGS"
+    logMessage "$cmd"
+    $cmd >> $LOG_DIR/log.t2t-trainer.out 2>> $LOG_DIR/log.t2t-trainer.err
     set -e
     logMessage "END training, elapsed time: $SECONDS seconds (`displaytime $SECONDS`)"
 fi
@@ -138,12 +139,13 @@ else
 
     SECONDS=0
     logMessage "START Averaging latest checkpoints..."
-    python $T2T_HOME/tensor2tensor/utils/avg_checkpoints.py \
-        --prefix $TRAIN_DIR/ \
-        --num_last_checkpoints $NUM_CKPT \
-        --output_path $OUTPUT_DIR/averaged.ckpt \
-        $additional_flags \
-        >> $LOG_DIR/log.avg_checkpoints.out 2>> $LOG_DIR/log.avg_checkpoints.err 
+    cmd="python $T2T_HOME/tensor2tensor/utils/avg_checkpoints.py
+      --prefix $TRAIN_DIR/
+      --num_last_checkpoints $NUM_CKPT
+      --output_path $OUTPUT_DIR/averaged.ckpt
+      $additional_flags"
+    logMessage "$cmd"
+    $cmd >> $LOG_DIR/log.avg_checkpoints.out 2>> $LOG_DIR/log.avg_checkpoints.err 
 
     # For now, save both ckpt and npz if SAVE_NPZ is on
     if [ $SAVE_NPZ -eq 1 ]; then
@@ -151,12 +153,13 @@ else
         if [ ! -z "$VAR_PREFIX" ]; then
             additional_flags="$additional_flags --var_prefix $VAR_PREFIX"
         fi
-        python $T2T_HOME/tensor2tensor/utils/avg_checkpoints.py \
-            --prefix $TRAIN_DIR/ \
-            --num_last_checkpoints $NUM_CKPT \
-            --output_path $OUTPUT_DIR/averaged.ckpt \
-            $additional_flags \
-            >> $LOG_DIR/log.avg_checkpoints.out 2>> $LOG_DIR/log.avg_checkpoints.err 
+        cmd="python $T2T_HOME/tensor2tensor/utils/avg_checkpoints.py
+          --prefix $TRAIN_DIR/
+          --num_last_checkpoints $NUM_CKPT
+          --output_path $OUTPUT_DIR/averaged.ckpt
+          $additional_flags"
+	logMessage "$cmd"
+        $cmd >> $LOG_DIR/log.avg_checkpoints.out 2>> $LOG_DIR/log.avg_checkpoints.err 
     fi
 
     logMessage "END averaging, elapsed time: $SECONDS seconds (`displaytime $SECONDS`)"
@@ -181,17 +184,18 @@ if [[ -f $DECODE_FILE ]]; then
     if [ $run_decode -eq 1 ]; then
         SECONDS=0
         logMessage "Start decoding... $DECODE_FILE"
-        python $T2T_BIN/t2t-decoder \
-          --data_dir=$DATA_DIR \
-          --problems=$PROBLEM \
-          --model=$MODEL \
-          --hparams_set=$HPARAMS \
-          --output_dir=$OUTPUT_DIR \
-          --decode_beam_size=$BEAM_SIZE \
-          --decode_alpha=$ALPHA \
-          --decode_from_file=$DECODE_FILE \
-          --decode_to_file=$DECODE_FILE_OUT_PATH \
-          >> $LOG_DIR/log.t2t-decoder.out 2>> $LOG_DIR/log.t2t-decoder.err
+        cmd="python $T2T_BIN/t2t-decoder
+          --data_dir=$DATA_DIR
+          --problems=$PROBLEM
+          --model=$MODEL
+          --hparams_set=$HPARAMS
+          --output_dir=$OUTPUT_DIR
+          --decode_beam_size=$BEAM_SIZE
+          --decode_alpha=$ALPHA
+          --decode_from_file=$DECODE_FILE
+          --decode_to_file=$DECODE_FILE_OUT_PATH"
+	logMessage "$cmd"
+        $cmd >> $LOG_DIR/log.t2t-decoder.out 2>> $LOG_DIR/log.t2t-decoder.err
         logMessage "END decoding, elapsed time: $SECONDS seconds (`displaytime $SECOND`)"
         logMessage "Decoded output: $DECODE_FILE_OUT_PATH"
     else
