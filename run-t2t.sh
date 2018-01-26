@@ -38,6 +38,7 @@ NUM_CKPT=${NUM_CKPT:-20}
 SAVE_NPZ=${SAVE_NPZ:-0}
 VAR_PREFIX=${VAR_PREFIX:-transformer}
 TRAINER_FLAGS=${TRAINER_FLAGS:-""}
+DECODER_FLAGS=$TRAINER_FLAGS
 PREV_MODEL=${PREV_MODEL:-""}
 
 # Decode options
@@ -193,7 +194,7 @@ if [[ -f $DECODE_FILE ]]; then
           --decode_beam_size=$BEAM_SIZE
           --decode_alpha=$ALPHA
           --decode_from_file=$DECODE_FILE
-          --decode_to_file=$DECODE_FILE_OUT_PATH"
+          --decode_to_file=$DECODE_FILE_OUT_PATH $DECODER_FLAGS"
 	logMessage "$cmd"
         $cmd >> $LOG_DIR/log.t2t-decoder.out 2>> $LOG_DIR/log.t2t-decoder.err
         logMessage "END decoding, elapsed time: $SECONDS seconds (`displaytime $SECOND`)"
