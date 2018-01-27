@@ -191,8 +191,7 @@ if [[ -f $DECODE_FILE ]]; then
           --model=$MODEL
           --hparams_set=$HPARAMS
           --output_dir=$OUTPUT_DIR
-          --decode_beam_size=$BEAM_SIZE
-          --decode_alpha=$ALPHA
+          --decode_params=beam_size=$BEAM_SIZE,alpha=$ALPHA
           --decode_from_file=$DECODE_FILE
           --decode_to_file=$DECODE_FILE_OUT_PATH $DECODER_FLAGS"
         logMessage "$cmd"
