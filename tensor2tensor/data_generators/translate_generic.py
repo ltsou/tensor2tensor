@@ -47,7 +47,38 @@ _TEST_DATASETS = [("dev/dev.src",
                    "dev/dev.trg")]
 
 _VOCABS = ("vocab/vocab.src",
-           "vocab/vocab.trg")
+           "vocab/vocab.trg",
+           "vocab/vocab.shared")
+
+
+def token_generator(source_path, target_path, token_vocab, eos=None):
+  """Generator for sequence-to-sequence tasks that uses tokens.
+
+  This generator assumes the files at source_path and target_path have
+  the same number of lines and yields dictionaries of "inputs" and "targets"
+  where inputs are token ids from the " "-split source (and target, resp.) lines
+  converted to integers using the token_map.
+
+  Args:
+    source_path: path to the file with source sentences.
+    target_path: path to the file with target sentences.
+    token_vocab: text_encoder.TextEncoder object.
+    eos: integer to append at the end of each sequence (default: None).
+
+  Yields:
+    A dictionary {"inputs": source-line, "targets": target-line} where
+    the lines are integer lists converted from tokens in the file lines.
+  """
+  eos_list = [] if eos is None else [eos]
+  with tf.gfile.GFile(source_path, mode="r") as source_file:
+    with tf.gfile.GFile(target_path, mode="r") as target_file:
+      source, target = source_file.readline(), target_file.readline()
+      while source and target:
+        source_ints = token_vocab.encode(source.strip()) + eos_list
+        target_ints = token_vocab.encode(target.strip()) + eos_list
+        yield {"inputs": source_ints, "targets": target_ints}
+        source, target = source_file.readline(), target_file.readline()
+
 
 def bi_vocabs_token_generator(source_path,
                               target_path,
@@ -237,3 +268,52 @@ class TranslateGenericExistingVocab(problem.Text2TextProblem):
     data_path = _compile_data(tmp_dir, datasets, "generic_tok_%s" % tag)
     return bi_vocabs_token_generator(data_path + ".src", data_path + ".trg",
                                      source_token_vocab, target_token_vocab, EOS)
+
+@registry.register_problem
+class TranslateGenericExistingSharedVocab(problem.Text2TextProblem):
+  """Problem spec for generic translation, using existing vocab
+  which is shared between source and target """
+
+  @property
+  def is_character_level(self):
+    return False
+
+  @property
+  def num_shards(self):
+    return 100
+
+  @property
+  def use_subword_tokenizer(self):
+    return True
+
+  @property
+  def input_space_id(self):
+    return problem.SpaceID.GENERIC
+
+  @property
+  def target_space_id(self):
+    return problem.SpaceID.GENERIC
+
+  @property
+  def vocab_name(self):
+    return "vocab.shared"
+
+  def feature_encoders(self, data_dir):
+    vocab_filename = os.path.join(data_dir, self.vocab_name)
+    shared_encoder = text_encoder.TokenTextEncoder(vocab_filename, replace_oov="<unk>")
+    return {"inputs": shared_encoder, "targets": shared_encoder}
+
+  def generator(self, data_dir, tmp_dir, train):
+    datasets = _TRAIN_DATASETS if train else _TEST_DATASETS
+    source_datasets = [[FLAGS.raw_data_dir, [item[0]]] for item in datasets]
+    target_datasets = [[FLAGS.raw_data_dir, [item[1]]] for item in datasets]
+    # Copy vocab to data directory
+    vocab_path = os.path.join(data_dir, self.vocab_name)
+    if os.path.exists(vocab_path):
+        os.remove(vocab_path)
+    copyVocab(os.path.join(FLAGS.raw_data_dir, _VOCABS[2]), vocab_path)
+    token_vocab = text_encoder.TokenTextEncoder(vocab_path, replace_oov="<unk>")
+    tag = "train" if train else "dev"
+    data_path = _compile_data(tmp_dir, datasets, "generic_tok_%s" % tag)
+    return token_generator(data_path + ".src", data_path + ".trg",
+                           token_vocab, EOS)
