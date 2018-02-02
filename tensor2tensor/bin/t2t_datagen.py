@@ -78,6 +78,9 @@ flags.DEFINE_string("t2t_usr_dir", "",
                     "The imported files should contain registrations, "
                     "e.g. @registry.register_problem calls, that will then be "
                     "available to t2t-datagen.")
+flags.DEFINE_integer("targeted_vocab_size", 2**15, "Targeted vocab size. "
+                     "Only useful when generating new vocab files.")
+flags.DEFINE_string("raw_data_dir", "/home/centos/data", "Location of input raw data.")
 
 # Mapping from problems that we can generate data for to their generators.
 # pylint: disable=g-long-lambda
