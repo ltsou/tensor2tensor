@@ -32,7 +32,8 @@ _TEST_DATASETS = [("dev/dev.src",
                    "dev/dev.trg")]
 
 _VOCABS = ("vocab/vocab.src",
-           "vocab/vocab.trg")
+           "vocab/vocab.trg",
+           "vocab/vocab.shared")
 
 def _compile_data(tmp_dir, datasets, filename):
   """Concatenate all `datasets` and save to `filename`."""
@@ -171,3 +172,41 @@ class TranslateGenericExistingVocab(translate.TranslateProblem):
     data_path = _compile_data(tmp_dir, datasets, "generic_tok_%s" % tag)
     return translate.bi_vocabs_token_generator(data_path + ".src", data_path + ".trg",
                                      source_token_vocab, target_token_vocab, EOS)
+
+
+@registry.register_problem
+class TranslateGenericExistingSharedVocab(translate.TranslateProblem):
+  """Problem spec for generic translation, using existing vocab
+  which is shared between source and target """
+
+  @property
+  def input_space_id(self):
+    return problem.SpaceID.GENERIC
+
+  @property
+  def target_space_id(self):
+    return problem.SpaceID.GENERIC
+
+  @property
+  def vocab_name(self):
+    return "vocab.shared"
+
+  def feature_encoders(self, data_dir):
+    vocab_filename = os.path.join(data_dir, self.vocab_name)
+    encoder = text_encoder.TokenTextEncoder(vocab_filename, replace_oov="<unk>")
+    return {"inputs": encoder, "targets": encoder}
+
+  def generator(self, data_dir, tmp_dir, train):
+    datasets = _TRAIN_DATASETS if train else _TEST_DATASETS
+    source_datasets = [[FLAGS.raw_data_dir, [item[0]]] for item in datasets]
+    target_datasets = [[FLAGS.raw_data_dir, [item[1]]] for item in datasets]
+    # Copy vocab to data directory
+    vocab_path = os.path.join(data_dir, self.vocab_name)
+    if os.path.exists(vocab_path):
+        os.remove(vocab_path)
+    copyVocab(os.path.join(FLAGS.raw_data_dir, _VOCABS[2]), vocab_path)
+    token_vocab = text_encoder.TokenTextEncoder(vocab_path, replace_oov="<unk>")
+    tag = "train" if train else "dev"
+    data_path = _compile_data(tmp_dir, datasets, "generic_tok_%s" % tag)
+    return translate.token_generator(data_path + ".src", data_path + ".trg",
+                                     token_vocab, EOS)
