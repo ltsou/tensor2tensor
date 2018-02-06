@@ -23,7 +23,14 @@ PROBLEM=${4:-translate_generic} # or translate_generic_existing_vocab
 MODEL=${5:-transformer}
 HPARAMS=${6:-transformer_base_single_gpu}
 
-T2T_HOME=${T2T_HOME:-/home/centos/tools/tensor2tensor}
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symlink
+  T2T_HOME="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$T2T_HOME/$SOURCE" # if $SOURCE was a relative symlink, we need to resolve it relative to the path where the symlink file was located
+done
+T2T_HOME="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+
 T2T_BIN=$T2T_HOME/tensor2tensor/bin
 DATA_DIR=$WORKDIR/data
 TMP_DIR=$WORKDIR/tmp_data
@@ -48,19 +55,6 @@ ALPHA=${ALPHA:-0.6}
 
 mkdir -p $LOG_DIR
 
-# get number of gpu
-ngpu=`nvidia-smi --query-gpu=gpu_name --format=csv,noheader | wc -l`
-if [[ $HPARAMS = transformer_base* || $HPARAMS = transformer_big* ]]; then
-    if [[ $ngpu -eq 1 && $HPARAMS != *_single_gpu ]]; then
-        HPARAMS=${HPARAMS}_single_gpu
-    elif [[ $ngpu -gt 1 ]]; then
-        TRAINER_FLAGS="$TRAINER_FLAGS --schedule=train"
-        if [[ $HPARAMS == *_single_gpu ]]; then
-            HPARAMS=${HPARAMS%"_single_gpu"}
-        fi
-    fi
-fi
-
 function displaytime {
   local T=$1
   local D=$((T/60/60/24))
@@ -77,6 +71,26 @@ function displaytime {
 function logMessage {
     echo "[`date`]: $1" >> $LOG
 }
+
+
+# get number of gpu
+if [ -z ${CUDA_VISIBLE_DEVICES+x} ]; then
+    ngpu=`nvidia-smi --query-gpu=gpu_name --format=csv,noheader | wc -l`
+    logMessage "Using all available GPUs: $ngpu"
+else
+    ngpu=`echo $CUDA_VISIBLE_DEVICES | tr , '\n' | wc -l`
+    logMessage "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+fi
+
+if [[ $HPARAMS = transformer_base* || $HPARAMS = transformer_big* ]]; then
+    if [[ $ngpu -eq 1 && $HPARAMS != *_single_gpu ]]; then
+        HPARAMS=${HPARAMS}_single_gpu
+    elif [[ $ngpu -gt 1 ]]; then
+        if [[ $HPARAMS == *_single_gpu ]]; then
+            HPARAMS=${HPARAMS%"_single_gpu"}
+        fi
+    fi
+fi
 
 logMessage "=== Start $0 ==="
 mkdir -p $DATA_DIR $TMP_DIR $TRAIN_DIR $OUTPUT_DIR
@@ -107,6 +121,11 @@ else
         TRAINER_FLAGS="$TRAINER_FLAGS --targeted_vocab_size=$VOCAB_SIZE"
     fi
 
+    # Is there a need to generate data?
+    if [ ! -f $DATA_DIR/generate_data.DONE ]; then
+        TRAINER_FLAGS="$TRAINER_FLAGS --generate_data"
+    fi
+
     # Copy over previous model if exists
     if [ -d "$PREV_MODEL" ]; then
         cp -r $PREV_MODEL/* $TRAIN_DIR
@@ -114,9 +133,7 @@ else
 
     SECONDS=0
     logMessage "START training... to step: $TRAIN_STEPS"
-    set +e
     cmd="python $T2T_BIN/t2t-trainer
-      --generate_data
       --raw_data_dir=$RAW_DATA_DIR
       --tmp_dir=$TMP_DIR
       --train_steps=$TRAIN_STEPS
@@ -129,7 +146,7 @@ else
       --keep_checkpoint_max=$NUM_CKPT $TRAINER_FLAGS"
     logMessage "$cmd"
     $cmd >> $LOG_DIR/log.t2t-trainer.out 2>> $LOG_DIR/log.t2t-trainer.err
-    set -e
+    touch $DATA_DIR/generate_data.DONE # Mark data generation as done
     logMessage "END training, elapsed time: $SECONDS seconds (`displaytime $SECONDS`)"
 fi
 
@@ -183,6 +200,10 @@ if [[ -f $DECODE_FILE ]]; then
         fi
     fi
     if [ $run_decode -eq 1 ]; then
+        # Need to specify a targeted vocab size if doing "translate_generic"
+        if [ $PROBLEM = translate_generic ]; then
+            DECODER_FLAGS="$DECODER_FLAGS --targeted_vocab_size=$VOCAB_SIZE"
+        fi
         SECONDS=0
         logMessage "Start decoding... $DECODE_FILE"
         cmd="python $T2T_BIN/t2t-decoder
