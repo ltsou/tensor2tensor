@@ -110,8 +110,10 @@ class LargebatchAdamOptimizer(tf.contrib.opt.LazyAdamOptimizer):
       indices, scatter_add)
 
   def _apply_sparse(self, grad, var):
+    # TODO: Implement a sparse version of that
+    dense_grad = tf.convert_to_tensor(grad)
     return self._apply_cond(
-      super(LargebatchAdamOptimizer, self)._apply_sparse, grad, var)
+      super(LargebatchAdamOptimizer, self)._apply_dense, dense_grad, var)
 
   def _finish(self, update_ops, name_scope):
     """Like super class method, but updates beta_power variables only every
