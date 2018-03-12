@@ -139,6 +139,12 @@ def save_npz(sess, output_path, prefix_to_include):
     # Rename keys
     params = {name.replace("/", "-"): param for name, param in tmp.items()}
     params = {re.sub("symbol_modality_\d+_\d+-", "symbol_modality-", name): param for name, param in params.items()}
+    # bring t2t v1.4.3 keys as close as possible to the ones used by t2t v1.2.4:
+    params = {name.replace("transformer-", ""): param for name, param in params.items()}
+    params = {name.replace("prepost", "post"): param for name, param in params.items()}
+    params = {name.replace("transform-kernel", "transform_single-kernel"): param for name, param in params.items()}
+    params = {name.replace("ffn-conv1-", "ffn-conv_hidden_relu-conv1_single-"): param for name, param in params.items()}
+    params = {name.replace("ffn-conv2-", "ffn-conv_hidden_relu-conv2_single-"): param for name, param in params.items()}
 
     # Save parameters
     tf.logging.info("Save model to path=%s.npz" % output_path)
