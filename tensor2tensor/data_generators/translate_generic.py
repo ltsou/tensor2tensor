@@ -145,12 +145,14 @@ class TranslateGenericCharacter(TranslateGeneric):
         data_dir, self.source_vocab_name,
         self.targeted_vocab_size, source_datasets,
         file_byte_budget=None,
-        character_base=True)
+        character_base=True,
+        replace_oov="<unk>")
     target_vocab = generator_utils.get_or_generate_vocab_nocompress(
         data_dir, self.target_vocab_name,
         self.targeted_vocab_size, target_datasets,
         file_byte_budget=None,
-        character_base=True)
+        character_base=True,
+        replace_oov="<unk>")
     tag = "train" if train else "dev"
     data_path = _compile_data(tmp_dir, datasets, "generic_tok_%s" % tag)
     return translate.bi_vocabs_token_generator(data_path + ".src", data_path + ".trg",
@@ -161,8 +163,8 @@ class TranslateGenericCharacter(TranslateGeneric):
                                          self.source_vocab_name)
     target_vocab_filename = os.path.join(data_dir,
                                          self.target_vocab_name)
-    source_token = text_encoder.CharacterTextEncoder(source_vocab_filename)
-    target_token = text_encoder.CharacterTextEncoder(target_vocab_filename)
+    source_token = text_encoder.CharacterTextEncoder(source_vocab_filename, replace_oov="<unk>")
+    target_token = text_encoder.CharacterTextEncoder(target_vocab_filename, replace_oov="<unk>")
     return {
         "inputs": source_token,
         "targets": target_token,
@@ -183,7 +185,8 @@ class TranslateGenericSharedCharacter(TranslateGeneric):
         data_dir, self.vocab_name,
         self.targeted_vocab_size, vocab_datasets,
         file_byte_budget=None,
-        character_base=True)
+        character_base=True,
+        replace_oov="<unk>")
     tag = "train" if train else "dev"
     data_path = _compile_data(tmp_dir, datasets, "generic_tok_%s" % tag)
     return translate.token_generator(data_path + ".src", data_path + ".trg",
@@ -191,7 +194,7 @@ class TranslateGenericSharedCharacter(TranslateGeneric):
 
   def feature_encoders(self, data_dir):
     vocab_filename = os.path.join(data_dir, self.vocab_name)
-    encoder = text_encoder.CharacterTextEncoder(vocab_filename)
+    encoder = text_encoder.CharacterTextEncoder(vocab_filename, replace_oov="<unk>")
     return {"inputs": encoder, "targets": encoder}
 
 

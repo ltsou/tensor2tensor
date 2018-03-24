@@ -315,7 +315,7 @@ def get_or_generate_vocab_inner(data_dir, vocab_filename, vocab_size,
   return vocab
 
 def get_or_generate_character_vocab_inner(data_dir, vocab_filename,
-                                          generator):
+                                          generator, replace_oov=None):
   """Inner implementation for vocab generators.
 
   Args:
@@ -334,7 +334,7 @@ def get_or_generate_character_vocab_inner(data_dir, vocab_filename,
 
   if vocab_filepath is not None and tf.gfile.Exists(vocab_filepath):
     tf.logging.info("Found vocab file: %s", vocab_filepath)
-    vocab = text_encoder.CharacterTextEncoder(vocab_filepath)
+    vocab = text_encoder.CharacterTextEncoder(vocab_filepath, replace_oov=replace_oov)
     return vocab
 
   tf.logging.info("Generating vocab file: %s", vocab_filepath)
@@ -343,7 +343,7 @@ def get_or_generate_character_vocab_inner(data_dir, vocab_filename,
     for tok in list(text_encoder.native_to_unicode(item)):
       token_counts[tok] += 1
 
-  vocab = text_encoder.CharacterTextEncoder(None, vocab_list=token_counts.keys())
+  vocab = text_encoder.CharacterTextEncoder(None, vocab_list=token_counts.keys(), replace_oov=replace_oov)
 
   if vocab_filepath is not None:
     vocab.store_to_file(vocab_filepath)
@@ -351,7 +351,7 @@ def get_or_generate_character_vocab_inner(data_dir, vocab_filename,
 
 
 def get_or_generate_vocab(data_dir, tmp_dir, vocab_filename, vocab_size,
-                          sources, file_byte_budget=1e6, character_base=False):
+                          sources, file_byte_budget=1e6, character_base=False, replace_oov=None):
   """Generate a vocabulary from the datasets in sources."""
 
   def generate():
@@ -406,7 +406,7 @@ def get_or_generate_vocab(data_dir, tmp_dir, vocab_filename, vocab_size,
 
   if character_base:
     return get_or_generate_character_vocab_inner(data_dir, vocab_filename,
-                                                 generate())
+                                                 generate(), replace_oov=replace_oov)
   else:
     return get_or_generate_vocab_inner(data_dir, vocab_filename, vocab_size,
                                        generate())
@@ -417,7 +417,8 @@ def get_or_generate_vocab_nocompress(data_dir,
                                      vocab_size,
                                      sources,
                                      file_byte_budget=1e6,
-                                     character_base=False):
+                                     character_base=False,
+                                     replace_oov=None):
   """Generate a vocabulary from the datasets in sources (_DATA_FILE_URLS)."""
 
   def generate():
@@ -452,7 +453,7 @@ def get_or_generate_vocab_nocompress(data_dir,
 
   if character_base:
     return get_or_generate_character_vocab_inner(data_dir, vocab_filename,
-                                                 generate())
+                                                 generate(), replace_oov=replace_oov)
   else:
     return get_or_generate_vocab_inner(data_dir, vocab_filename, vocab_size,
                                        generate())

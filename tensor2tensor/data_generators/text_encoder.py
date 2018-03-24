@@ -40,7 +40,7 @@ import tensorflow as tf
 # Reserved tokens for things like padding and EOS symbols.
 PAD = "<pad>"
 EOS = "<EOS>"
-RESERVED_TOKENS = [PAD, EOS]
+RESERVED_TOKENS = [PAD, EOS, "<unk>"]
 NUM_RESERVED_TOKENS = len(RESERVED_TOKENS)
 PAD_ID = RESERVED_TOKENS.index(PAD)  # Normally 0
 EOS_ID = RESERVED_TOKENS.index(EOS)  # Normally 1
@@ -242,6 +242,7 @@ class TokenTextEncoder(TextEncoder):
     super(TokenTextEncoder, self).__init__(num_reserved_ids=num_reserved_ids)
     self._reverse = reverse
     self._replace_oov = replace_oov
+    tf.logging.info("replace_oov: %s", replace_oov)
     if vocab_filename:
       self._init_vocab_from_file(vocab_filename)
     else:
