@@ -331,6 +331,39 @@ class TokenTextEncoder(TextEncoder):
       for i in xrange(len(self._id_to_token)):
         f.write(self._id_to_token[i] + "\n")
 
+class CharacterTextEncoder(TokenTextEncoder):
+  """Encoder based on a user-supplied vocabulary (file or list)."""
+
+  def encode(self, sentence):
+    """Split a string into a list of character ids."""
+    #tokens = list(sentence.strip())
+    tokens = list(native_to_unicode(sentence.strip()))
+    for tok in tokens:
+        if tok not in self._token_to_id:
+            tf.logging.info("Missing token '%s', Sentence: '%s'", tok, sentence)
+    if self._replace_oov is not None:
+      tokens = [t if t in self._token_to_id else self._replace_oov
+                for t in tokens]
+    ret = [self._token_to_id[tok] for tok in tokens]
+    return ret[::-1] if self._reverse else ret
+
+  def decode(self, ids):
+    return "".join(self.decode_list(ids))
+
+  def _init_vocab_from_file(self, filename):
+    """Load vocab from a file.
+
+    Args:
+      filename: The file to load vocabulary from.
+    """
+    def token_gen():
+      with tf.gfile.Open(filename) as f:
+        for line in f:
+          token = line.rstrip("\r\n")
+          yield native_to_unicode(token)
+
+    self._init_vocab(token_gen(), add_reserved_tokens=False)
+
 
 def _escape_token(token, alphabet):
   """Escape away underscores and OOV characters and append '_'.

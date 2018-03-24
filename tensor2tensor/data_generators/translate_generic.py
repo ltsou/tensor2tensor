@@ -104,10 +104,10 @@ class TranslateGeneric(translate.TranslateProblem):
     target_datasets = [[FLAGS.raw_data_dir, [item[1]]] for item in datasets]
     source_vocab = generator_utils.get_or_generate_vocab_nocompress(
         data_dir, self.source_vocab_name,
-        self.targeted_vocab_size, source_datasets)
+        self.targeted_vocab_size, source_datasets, file_byte_budget=None)
     target_vocab = generator_utils.get_or_generate_vocab_nocompress(
         data_dir, self.target_vocab_name,
-        self.targeted_vocab_size, target_datasets)
+        self.targeted_vocab_size, target_datasets, file_byte_budget=None)
     tag = "train" if train else "dev"
     data_path = _compile_data(tmp_dir, datasets, "generic_tok_%s" % tag)
     return translate.bi_vocabs_token_generator(data_path + ".src", data_path + ".trg",
@@ -124,6 +124,75 @@ class TranslateGeneric(translate.TranslateProblem):
         "inputs": source_token,
         "targets": target_token,
     }
+
+@registry.register_problem
+class TranslateGenericCharacter(TranslateGeneric):
+  """Problem spec for generic character based translation."""
+
+  @property
+  def source_vocab_name(self):
+    return "vocab.src"
+
+  @property
+  def target_vocab_name(self):
+    return "vocab.trg"
+
+  def generator(self, data_dir, tmp_dir, train):
+    datasets = _TRAIN_DATASETS if train else _TEST_DATASETS
+    source_datasets = [[FLAGS.raw_data_dir, [item[0]]] for item in datasets]
+    target_datasets = [[FLAGS.raw_data_dir, [item[1]]] for item in datasets]
+    source_vocab = generator_utils.get_or_generate_vocab_nocompress(
+        data_dir, self.source_vocab_name,
+        self.targeted_vocab_size, source_datasets,
+        file_byte_budget=None,
+        character_base=True)
+    target_vocab = generator_utils.get_or_generate_vocab_nocompress(
+        data_dir, self.target_vocab_name,
+        self.targeted_vocab_size, target_datasets,
+        file_byte_budget=None,
+        character_base=True)
+    tag = "train" if train else "dev"
+    data_path = _compile_data(tmp_dir, datasets, "generic_tok_%s" % tag)
+    return translate.bi_vocabs_token_generator(data_path + ".src", data_path + ".trg",
+                                     source_vocab, target_vocab, EOS)
+
+  def feature_encoders(self, data_dir):
+    source_vocab_filename = os.path.join(data_dir,
+                                         self.source_vocab_name)
+    target_vocab_filename = os.path.join(data_dir,
+                                         self.target_vocab_name)
+    source_token = text_encoder.CharacterTextEncoder(source_vocab_filename)
+    target_token = text_encoder.CharacterTextEncoder(target_vocab_filename)
+    return {
+        "inputs": source_token,
+        "targets": target_token,
+    }
+
+@registry.register_problem
+class TranslateGenericSharedCharacter(TranslateGeneric):
+  """Problem spec for generic character based translation."""
+
+  @property
+  def vocab_name(self):
+    return "vocab.shared"
+
+  def generator(self, data_dir, tmp_dir, train):
+    datasets = _TRAIN_DATASETS if train else _TEST_DATASETS
+    vocab_datasets = [[FLAGS.raw_data_dir, [item[0], item[1]]] for item in datasets]
+    char_vocab = generator_utils.get_or_generate_vocab_nocompress(
+        data_dir, self.vocab_name,
+        self.targeted_vocab_size, vocab_datasets,
+        file_byte_budget=None,
+        character_base=True)
+    tag = "train" if train else "dev"
+    data_path = _compile_data(tmp_dir, datasets, "generic_tok_%s" % tag)
+    return translate.token_generator(data_path + ".src", data_path + ".trg",
+                                     char_vocab, EOS)
+
+  def feature_encoders(self, data_dir):
+    vocab_filename = os.path.join(data_dir, self.vocab_name)
+    encoder = text_encoder.CharacterTextEncoder(vocab_filename)
+    return {"inputs": encoder, "targets": encoder}
 
 
 @registry.register_problem
@@ -155,8 +224,6 @@ class TranslateGenericExistingVocab(translate.TranslateProblem):
 
   def generator(self, data_dir, tmp_dir, train):
     datasets = _TRAIN_DATASETS if train else _TEST_DATASETS
-    source_datasets = [[FLAGS.raw_data_dir, [item[0]]] for item in datasets]
-    target_datasets = [[FLAGS.raw_data_dir, [item[1]]] for item in datasets]
     # Copy vocab to data directory
     source_vocab_path = os.path.join(data_dir, self.source_vocab_name)
     target_vocab_path = os.path.join(data_dir, self.target_vocab_name)
@@ -198,14 +265,35 @@ class TranslateGenericExistingSharedVocab(translate.TranslateProblem):
 
   def generator(self, data_dir, tmp_dir, train):
     datasets = _TRAIN_DATASETS if train else _TEST_DATASETS
-    source_datasets = [[FLAGS.raw_data_dir, [item[0]]] for item in datasets]
-    target_datasets = [[FLAGS.raw_data_dir, [item[1]]] for item in datasets]
     # Copy vocab to data directory
     vocab_path = os.path.join(data_dir, self.vocab_name)
     if os.path.exists(vocab_path):
         os.remove(vocab_path)
     copyVocab(os.path.join(FLAGS.raw_data_dir, _VOCABS[2]), vocab_path)
     token_vocab = text_encoder.TokenTextEncoder(vocab_path, replace_oov="<unk>")
+    tag = "train" if train else "dev"
+    data_path = _compile_data(tmp_dir, datasets, "generic_tok_%s" % tag)
+    return translate.token_generator(data_path + ".src", data_path + ".trg",
+                                     token_vocab, EOS)
+
+@registry.register_problem
+class TranslateGenericExistingSharedCharacterVocab(TranslateGenericExistingSharedVocab):
+  """Problem spec for generic translation, using existing character vocab
+  which is shared between source and target """
+
+  def feature_encoders(self, data_dir):
+    vocab_filename = os.path.join(data_dir, self.vocab_name)
+    encoder = text_encoder.CharacterTextEncoder(vocab_filename, replace_oov="<unk>")
+    return {"inputs": encoder, "targets": encoder}
+
+  def generator(self, data_dir, tmp_dir, train):
+    datasets = _TRAIN_DATASETS if train else _TEST_DATASETS
+    # Copy vocab to data directory
+    vocab_path = os.path.join(data_dir, self.vocab_name)
+    if os.path.exists(vocab_path):
+        os.remove(vocab_path)
+    copyVocab(os.path.join(FLAGS.raw_data_dir, _VOCABS[2]), vocab_path)
+    token_vocab = text_encoder.CharacterTextEncoder(vocab_path, replace_oov="<unk>")
     tag = "train" if train else "dev"
     data_path = _compile_data(tmp_dir, datasets, "generic_tok_%s" % tag)
     return translate.token_generator(data_path + ".src", data_path + ".trg",
