@@ -443,7 +443,7 @@ def get_or_generate_vocab_nocompress(data_dir,
                   counter += 1
                 else:
                   if file_byte_budget_ <= 0:
-                    tf.logging.info("Exceeding file_byte_budget, stop reading in more lines from file: %s", filepath)
+                    tf.logging.info("Exceed file_byte_budget, stop reading in more lines from file: %s", filepath)
                     break
                   line = line.strip()
                   file_byte_budget_ -= len(line)

@@ -338,9 +338,6 @@ class CharacterTextEncoder(TokenTextEncoder):
     """Split a string into a list of character ids."""
     #tokens = list(sentence.strip())
     tokens = list(native_to_unicode(sentence.strip()))
-    for tok in tokens:
-        if tok not in self._token_to_id:
-            tf.logging.info("Missing token '%s', Sentence: '%s'", tok, sentence)
     if self._replace_oov is not None:
       tokens = [t if t in self._token_to_id else self._replace_oov
                 for t in tokens]
