@@ -64,6 +64,8 @@ flags.DEFINE_integer("eval_early_stopping_steps", None,
                      "If --eval_early_stopping_steps is not None, then stop "
                      "when --eval_early_stopping_metric has not decreased for "
                      "--eval_early_stopping_steps")
+flags.DEFINE_bool("eval_file_out", False,
+                  "If not none, validated output to training directory every checkpoint")
 flags.DEFINE_bool("eval_early_stopping_metric_minimize", True,
                   "Whether to check for the early stopping metric going down "
                   "or up.")

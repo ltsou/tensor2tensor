@@ -28,6 +28,7 @@ import numpy as np
 
 from tensor2tensor.utils import devices
 from tensor2tensor.utils import metrics_hook
+from tensor2tensor.utils import eval_hook
 from tensor2tensor.utils import registry
 from tensor2tensor.utils import t2t_model
 
@@ -188,7 +189,8 @@ def create_estimator(model_name,
 
 def create_hooks(use_tfdbg=False, use_dbgprofile=False, dbgprofile_kwargs=None,
                  use_validation_monitor=False, validation_monitor_kwargs=None,
-                 use_early_stopping=False, early_stopping_kwargs=None):
+                 use_early_stopping=False, early_stopping_kwargs=None,
+                 use_eval_file_out=False, eval_file_out_kwargs=None):
   """Create train and eval hooks for Experiment."""
   train_monitors = []
   eval_hooks = []
@@ -219,6 +221,10 @@ def create_hooks(use_tfdbg=False, use_dbgprofile=False, dbgprofile_kwargs=None,
     train_monitors.append(hook)
     eval_hooks.append(hook)
 
+  if use_eval_file_out:
+    tf.logging.info("Using EvalFileOutHook")
+    hook = eval_hook.EvalFileOutHook(**eval_file_out_kwargs)
+    eval_hooks.append(hook)
   return train_monitors, eval_hooks
 
 
@@ -235,6 +241,7 @@ def create_experiment(run_config,
                       decode_hparams=None,
                       use_tfdbg=False,
                       use_dbgprofile=False,
+                      eval_file_out=False,
                       eval_early_stopping_steps=None,
                       eval_early_stopping_metric=None,
                       eval_early_stopping_metric_delta=None,
@@ -286,6 +293,12 @@ def create_experiment(run_config,
         plateau_decrease=eval_early_stopping_metric_minimize,
         plateau_delta=eval_early_stopping_metric_delta,
         every_n_steps=min_eval_frequency)
+    
+    eval_file_out_dir = None
+    if eval_file_out:
+        eval_file_out_dir = os.path.join(run_config.model_dir, "eval_out")
+    eval_file_out_kwargs = dict(eval_file_out_dir=eval_file_out_dir)
+    hparams.add_hparam("eval_file_out_dir", eval_file_out_dir)
 
     # In-process eval (and possible early stopping)
     if schedule == "continuous_train_and_eval" and min_eval_frequency:
@@ -303,6 +316,8 @@ def create_experiment(run_config,
         dbgprofile_kwargs=dbgprofile_kwargs,
         use_validation_monitor=use_validation_monitor,
         use_early_stopping=use_early_stopping,
+        use_eval_file_out=eval_file_out,
+        eval_file_out_kwargs=eval_file_out_kwargs,
         validation_monitor_kwargs=validation_monitor_kwargs,
         early_stopping_kwargs=early_stopping_kwargs)
     hooks_kwargs = {"train_monitors": train_monitors, "eval_hooks": eval_hooks}
