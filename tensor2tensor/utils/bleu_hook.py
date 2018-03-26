@@ -37,24 +37,53 @@ from six.moves import zip
 # pylint: enable=redefined-builtin
 
 from tensor2tensor.utils.eval_hook import TMP_NAME
-
+from tensor2tensor.data_generators import text_encoder
 import tensorflow as tf
 
+def _save_until_eos(hyp):
+  try:
+    index = list(hyp).index(text_encoder.EOS_ID)
+    return hyp[0:index]
+  except ValueError:
+    return hyp
+
 class BleuComputer(object):
-  def __init__(self, eval_file_out_dir=None, inputs_vocab=None, targets_vocab=None):
+  def __init__(self, eval_file_out_dir=None, targets_vocab=None):
     if not tf.gfile.Exists(eval_file_out_dir):
       tf.gfile.MakeDirs(eval_file_out_dir)
     self.eval_out_file = os.path.join(eval_file_out_dir, TMP_NAME)
-    self.inputs_vocab = inputs_vocab
+    self.ref_out_file = os.path.join(eval_file_out_dir, "ref")
+    self.write_ref = False
+    if not tf.gfile.Exists(self.ref_out_file):
+      self.write_ref = True
     self.targets_vocab = targets_vocab
+   
 
-
-  def _write_out_line(self, file_out, hyp_line, ref_line):
+  def _write_out_line(self, file_out, line):
     if self.targets_vocab is not None:
-      hyp_out = self.targets_vocab.decode(hyp_line)
+      line_out = self.targets_vocab.decode(_save_until_eos(line))
     else:
-      hyp_out = " ".join(map(str, hyp_line))
-    file_out.write('{}\n'.format(hyp_out))
+      line_out = " ".join(map(str, line))
+    file_out.write('{}\n'.format(line_out))
+
+  def _get_out_files(self):
+    hyp_out = None
+    ref_out = None
+    if self.eval_out_file is not None:
+      hyp_out = open(self.eval_out_file, 'a')
+    if self.write_ref and self.ref_out_file is not None:
+      ref_out = open(self.ref_out_file, 'a')
+    return hyp_out, ref_out
+    
+  def _maybe_write_lines(self, files, lines):
+    for f, line in zip(files, lines):
+      if f is not None:
+        self._write_out_line(f, line)
+
+  def _maybe_close(self, files):
+    for f in files:
+      if f is not None:
+        f.close()
 
   def _compute_bleu(self,
                     reference_corpus,
@@ -82,13 +111,9 @@ class BleuComputer(object):
     matches_by_order = [0] * max_order
     possible_matches_by_order = [0] * max_order
     precisions = []
-    f_out = None
-    if self.eval_out_file is not None:
-      f_out = open(self.eval_out_file, 'a')
-
+    hyp_out, ref_out = self._get_out_files()
     for (references, translations) in zip(reference_corpus, translation_corpus):
-      if f_out is not None:
-        self._write_out_line(f_out, translations, references)
+      self._maybe_write_lines((hyp_out, ref_out), (translations, references))
       reference_length += len(references)
       translation_length += len(translations)
       ref_ngram_counts = _get_ngrams(references, max_order)
@@ -102,8 +127,7 @@ class BleuComputer(object):
         matches_by_order[len(ngram) - 1] += overlap[ngram]
       for ngram in translation_ngram_counts:
         possible_matches_by_order[len(ngram)-1] += translation_ngram_counts[ngram]
-    if f_out is not None:
-      f_out.close()
+    self._maybe_close((hyp_out, ref_out))
 
     precisions = [0] * max_order
     smooth = 1.0
@@ -127,6 +151,8 @@ class BleuComputer(object):
       bp = math.exp(1 - 1. / ratio) if ratio < 1.0 else 1.0
     bleu = geo_mean * bp
     return np.float32(bleu)
+
+
 
 def _get_ngrams(segment, max_order):
   """Extracts all n-grams upto a given maximum order from an input segment.
@@ -154,13 +180,11 @@ def compute_bleu(reference_corpus,
   return computer._compute_bleu(reference_corpus, translation_corpus)
 
 
-def get_vocabs(hparams):
+def get_vocab(hparams):
   if hparams:
-    has_inputs = "inputs" in hparams.vocabulary
-    inputs_vocab_key = "inputs" if has_inputs else "targets"
-    return hparams.vocabulary[inputs_vocab_key], hparams.vocabulary["targets"]
+    return hparams.vocabulary["targets"]
   else:
-    return None, None
+    return None
   
 def bleu_score(predictions, labels,  model_hparams=None, problem_hparams=None, 
                **unused_kwargs):
@@ -183,10 +207,8 @@ def bleu_score(predictions, labels,  model_hparams=None, problem_hparams=None,
   # Convert the outputs and labels to a [batch_size, input_length] tensor.
   outputs = tf.squeeze(outputs, axis=[-1, -2])
   labels = tf.squeeze(labels, axis=[-1, -2])
-  inputs_vocab, targets_vocab = get_vocabs(problem_hparams)
   computer = BleuComputer(eval_file_out_dir=model_hparams.eval_file_out_dir,
-                          inputs_vocab=inputs_vocab,
-                          targets_vocab=targets_vocab)
+                          targets_vocab=get_vocab(problem_hparams))
   bleu = tf.py_func(computer._compute_bleu, (labels, outputs), tf.float32)
   return bleu, tf.constant(1.0)
 
