@@ -29,14 +29,104 @@ import unicodedata
 # Dependency imports
 
 import numpy as np
+import os
 import six
 # pylint: disable=redefined-builtin
 from six.moves import xrange
 from six.moves import zip
 # pylint: enable=redefined-builtin
 
+from tensor2tensor.utils.eval_hook import TMP_NAME
+
 import tensorflow as tf
 
+class BleuComputer(object):
+  def __init__(self, eval_file_out_dir=None, inputs_vocab=None, targets_vocab=None):
+    if not tf.gfile.Exists(eval_file_out_dir):
+      tf.gfile.MakeDirs(eval_file_out_dir)
+    self.eval_out_file = os.path.join(eval_file_out_dir, TMP_NAME)
+    self.inputs_vocab = inputs_vocab
+    self.targets_vocab = targets_vocab
+
+
+  def _write_out_line(self, file_out, hyp_line, ref_line):
+    if self.targets_vocab is not None:
+      hyp_out = self.targets_vocab.decode(hyp_line)
+    else:
+      hyp_out = " ".join(map(str, hyp_line))
+    file_out.write('{}\n'.format(hyp_out))
+
+  def _compute_bleu(self,
+                    reference_corpus,
+                    translation_corpus,
+                    max_order=4,
+                    use_bp=True):
+    """Computes BLEU score of translated segments against one or more references.
+
+    Args:
+      reference_corpus: list of references for each translation. Each
+          reference should be tokenized into a list of tokens.
+      translation_corpus: list of translations to score. Each translation
+          should be tokenized into a list of tokens.
+      max_order: Maximum n-gram order to use when computing BLEU score.
+      use_bp: boolean, whether to apply brevity penalty.
+
+    Returns:
+      BLEU score.
+    """
+    reference_length = 0
+    translation_length = 0
+    bp = 1.0
+    geo_mean = 0
+
+    matches_by_order = [0] * max_order
+    possible_matches_by_order = [0] * max_order
+    precisions = []
+    f_out = None
+    if self.eval_out_file is not None:
+      f_out = open(self.eval_out_file, 'a')
+
+    for (references, translations) in zip(reference_corpus, translation_corpus):
+      if f_out is not None:
+        self._write_out_line(f_out, translations, references)
+      reference_length += len(references)
+      translation_length += len(translations)
+      ref_ngram_counts = _get_ngrams(references, max_order)
+      translation_ngram_counts = _get_ngrams(translations, max_order)
+
+      overlap = dict((ngram,
+                      min(count, translation_ngram_counts[ngram]))
+                     for ngram, count in ref_ngram_counts.items())
+
+      for ngram in overlap:
+        matches_by_order[len(ngram) - 1] += overlap[ngram]
+      for ngram in translation_ngram_counts:
+        possible_matches_by_order[len(ngram)-1] += translation_ngram_counts[ngram]
+    if f_out is not None:
+      f_out.close()
+
+    precisions = [0] * max_order
+    smooth = 1.0
+    for i in xrange(0, max_order):
+      if possible_matches_by_order[i] > 0:
+        precisions[i] = matches_by_order[i] / possible_matches_by_order[i]
+        if matches_by_order[i] > 0:
+          precisions[i] = matches_by_order[i] / possible_matches_by_order[i]
+        else:
+          smooth *= 2
+          precisions[i] = 1.0 / (smooth * possible_matches_by_order[i])
+      else:
+        precisions[i] = 0.0
+
+    if max(precisions) > 0:
+      p_log_sum = sum(math.log(p) for p in precisions if p)
+      geo_mean = math.exp(p_log_sum/max_order)
+
+    if use_bp:
+      ratio = translation_length / reference_length
+      bp = math.exp(1 - 1. / ratio) if ratio < 1.0 else 1.0
+    bleu = geo_mean * bp
+    return np.float32(bleu)
 
 def _get_ngrams(segment, max_order):
   """Extracts all n-grams upto a given maximum order from an input segment.
@@ -57,72 +147,23 @@ def _get_ngrams(segment, max_order):
       ngram_counts[ngram] += 1
   return ngram_counts
 
-
 def compute_bleu(reference_corpus,
                  translation_corpus,
-                 max_order=4,
-                 use_bp=True):
-  """Computes BLEU score of translated segments against one or more references.
-
-  Args:
-    reference_corpus: list of references for each translation. Each
-        reference should be tokenized into a list of tokens.
-    translation_corpus: list of translations to score. Each translation
-        should be tokenized into a list of tokens.
-    max_order: Maximum n-gram order to use when computing BLEU score.
-    use_bp: boolean, whether to apply brevity penalty.
-
-  Returns:
-    BLEU score.
-  """
-  reference_length = 0
-  translation_length = 0
-  bp = 1.0
-  geo_mean = 0
-
-  matches_by_order = [0] * max_order
-  possible_matches_by_order = [0] * max_order
-  precisions = []
-
-  for (references, translations) in zip(reference_corpus, translation_corpus):
-    reference_length += len(references)
-    translation_length += len(translations)
-    ref_ngram_counts = _get_ngrams(references, max_order)
-    translation_ngram_counts = _get_ngrams(translations, max_order)
-
-    overlap = dict((ngram,
-                    min(count, translation_ngram_counts[ngram]))
-                   for ngram, count in ref_ngram_counts.items())
-
-    for ngram in overlap:
-      matches_by_order[len(ngram) - 1] += overlap[ngram]
-    for ngram in translation_ngram_counts:
-      possible_matches_by_order[len(ngram)-1] += translation_ngram_counts[ngram]
-  precisions = [0] * max_order
-  smooth = 1.0
-  for i in xrange(0, max_order):
-    if possible_matches_by_order[i] > 0:
-      precisions[i] = matches_by_order[i] / possible_matches_by_order[i]
-      if matches_by_order[i] > 0:
-        precisions[i] = matches_by_order[i] / possible_matches_by_order[i]
-      else:
-        smooth *= 2
-        precisions[i] = 1.0 / (smooth * possible_matches_by_order[i])
-    else:
-      precisions[i] = 0.0
-
-  if max(precisions) > 0:
-    p_log_sum = sum(math.log(p) for p in precisions if p)
-    geo_mean = math.exp(p_log_sum/max_order)
-
-  if use_bp:
-    ratio = translation_length / reference_length
-    bp = math.exp(1 - 1. / ratio) if ratio < 1.0 else 1.0
-  bleu = geo_mean * bp
-  return np.float32(bleu)
+                 max_order=4, use_bp=True):
+  computer = BleuComputer()
+  return computer._compute_bleu(reference_corpus, translation_corpus)
 
 
-def bleu_score(predictions, labels, **unused_kwargs):
+def get_vocabs(hparams):
+  if hparams:
+    has_inputs = "inputs" in hparams.vocabulary
+    inputs_vocab_key = "inputs" if has_inputs else "targets"
+    return hparams.vocabulary[inputs_vocab_key], hparams.vocabulary["targets"]
+  else:
+    return None, None
+  
+def bleu_score(predictions, labels,  model_hparams=None, problem_hparams=None, 
+               **unused_kwargs):
   """BLEU score computation between labels and predictions.
 
   An approximate BLEU scoring method since we do not glue word pieces or
@@ -132,16 +173,21 @@ def bleu_score(predictions, labels, **unused_kwargs):
   Args:
     predictions: tensor, model predicitons
     labels: tensor, gold output.
-
+    model_hparams: contains eval_file_out_dir, which is either None or a string path
+    problem_hparams: contains input and target vocabs for string-mapping
   Returns:
     bleu: int, approx bleu score
   """
+ 
   outputs = tf.to_int32(tf.argmax(predictions, axis=-1))
   # Convert the outputs and labels to a [batch_size, input_length] tensor.
   outputs = tf.squeeze(outputs, axis=[-1, -2])
   labels = tf.squeeze(labels, axis=[-1, -2])
-
-  bleu = tf.py_func(compute_bleu, (labels, outputs), tf.float32)
+  inputs_vocab, targets_vocab = get_vocabs(problem_hparams)
+  computer = BleuComputer(eval_file_out_dir=model_hparams.eval_file_out_dir,
+                          inputs_vocab=inputs_vocab,
+                          targets_vocab=targets_vocab)
+  bleu = tf.py_func(computer._compute_bleu, (labels, outputs), tf.float32)
   return bleu, tf.constant(1.0)
 
 

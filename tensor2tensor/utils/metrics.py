@@ -278,7 +278,8 @@ def create_evaluation_metrics(problems, model_hparams):
       are not defined in the Metrics enum.
   """
 
-  def make_problem_specific_metric_fn(metric_fn, problem_idx, weights_fn):
+  def make_problem_specific_metric_fn(metric_fn, problem_idx, weights_fn,
+                                      model_hparams=None, problem_hparams=None):
     """Create a metric fn conditioned on problem_idx."""
 
     def problem_metric_fn(predictions, features):
@@ -292,7 +293,11 @@ def create_evaluation_metrics(problems, model_hparams):
       args, _, keywords, _ = inspect.getargspec(metric_fn)
       if ("features" in args) or keywords:
         kwargs["features"] = features
-
+      if ("model_hparams" in args):
+        kwargs["model_hparams"] = model_hparams
+      if ("problem_hparams" in args):
+        kwargs["problem_hparams"] = problem_hparams
+     
       def wrapped_metric_fn():
         return metric_fn(predictions, labels, weights_fn=weights_fn, **kwargs)
 
@@ -320,8 +325,9 @@ def create_evaluation_metrics(problems, model_hparams):
                                 weights_fn=common_layers.weights_nonzero):
       _, _ = labels, weights_fn
       return metric_fn(predictions, model_hparams)
-
-    tm = problem_instance.get_hparams().target_modality
+      
+    problem_hparams = problem_instance.get_hparams()
+    tm = problem_hparams.target_modality
     if isinstance(tm, tuple):
       tm = registry.create_modality(tm, model_hparams)
     weights_fn = tm.targets_weights_fn
@@ -333,7 +339,8 @@ def create_evaluation_metrics(problems, model_hparams):
         eval_metrics[metric_name] = image_wrapped_metric_fn
       else:
         problem_metric_fn = make_problem_specific_metric_fn(
-            metric_fn, problem_idx, weights_fn)
+            metric_fn, problem_idx, weights_fn,
+          model_hparams=model_hparams, problem_hparams=problem_hparams)
         eval_metrics[metric_name] = problem_metric_fn
 
   return eval_metrics

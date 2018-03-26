@@ -24,11 +24,13 @@ import os
 
 import tensorflow as tf
 
+TMP_NAME = "dev.out-tmp"
 
 class EvalFileOutHook(tf.train.SessionRunHook):
   """Hook to handle validation output tracking
   """
   _EVAL_NAME = "dev.out-%d"
+
 
   def __init__(self, eval_file_out_dir, save_every_eval=True):
     """Construct EvalFileOutHook.
@@ -61,8 +63,8 @@ class EvalFileOutHook(tf.train.SessionRunHook):
 
   def end(self, session):
     out_file = self._EVAL_NAME % self.global_step
+    tmp_path = os.path.join(self.eval_file_out_dir, TMP_NAME)
     out_path = os.path.join(self.eval_file_out_dir, out_file)
-    tf.logging.info('Ready to move val out file to {}'.format(out_path))
-    # copy file here and delete tmp file. may need to also copy references if not always in same order
+    os.rename(tmp_path, out_path)
 
 
