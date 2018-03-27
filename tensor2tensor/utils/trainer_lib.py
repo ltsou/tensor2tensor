@@ -242,6 +242,7 @@ def create_experiment(run_config,
                       use_tfdbg=False,
                       use_dbgprofile=False,
                       eval_file_out=False,
+                      eval_file_out_save_last_only=True,
                       eval_early_stopping_steps=None,
                       eval_early_stopping_metric=None,
                       eval_early_stopping_metric_delta=None,
@@ -297,7 +298,8 @@ def create_experiment(run_config,
     eval_file_out_dir = None
     if eval_file_out:
         eval_file_out_dir = os.path.join(run_config.model_dir, "eval_out")
-    eval_file_out_kwargs = dict(eval_file_out_dir=eval_file_out_dir)
+    eval_file_out_kwargs = dict(eval_file_out_dir=eval_file_out_dir,
+                                save_last_only=eval_file_out_save_last_only)
     hparams.add_hparam("eval_file_out_dir", eval_file_out_dir)
 
     # In-process eval (and possible early stopping)

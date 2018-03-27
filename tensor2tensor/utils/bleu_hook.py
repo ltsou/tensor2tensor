@@ -49,15 +49,19 @@ def _save_until_eos(hyp):
 
 class BleuComputer(object):
   def __init__(self, eval_file_out_dir=None, targets_vocab=None):
-    if not tf.gfile.Exists(eval_file_out_dir):
-      tf.gfile.MakeDirs(eval_file_out_dir)
-    self.eval_out_file = os.path.join(eval_file_out_dir, TMP_NAME)
-    self.ref_out_file = os.path.join(eval_file_out_dir, "ref")
-    self.write_ref = False
-    if not tf.gfile.Exists(self.ref_out_file):
-      self.write_ref = True
     self.targets_vocab = targets_vocab
-   
+    self.write_ref = False
+    self.eval_out_file = None
+    self.ref_out_file = None
+
+    if eval_file_out_dir:
+      if not tf.gfile.Exists(eval_file_out_dir):
+        tf.gfile.MakeDirs(eval_file_out_dir)
+      self.eval_out_file = os.path.join(eval_file_out_dir, TMP_NAME)
+      self.ref_out_file = os.path.join(eval_file_out_dir, "ref")
+      if not tf.gfile.Exists(self.ref_out_file):
+        self.write_ref = True
+      
 
   def _write_out_line(self, file_out, line):
     if self.targets_vocab is not None:

@@ -66,6 +66,9 @@ flags.DEFINE_integer("eval_early_stopping_steps", None,
                      "--eval_early_stopping_steps")
 flags.DEFINE_bool("eval_file_out", False,
                   "If not none, validated output to training directory every checkpoint")
+flags.DEFINE_bool("eval_save_last_out_only", True,
+                  "If true, save only eval out for most recent checkpoint. "
+                  "If false save for every checkpoint.")
 flags.DEFINE_bool("eval_early_stopping_metric_minimize", True,
                   "Whether to check for the early stopping metric going down "
                   "or up.")

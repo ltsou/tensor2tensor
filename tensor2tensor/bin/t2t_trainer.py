@@ -111,6 +111,7 @@ def create_experiment_fn():
       use_tfdbg=FLAGS.tfdbg,
       use_dbgprofile=FLAGS.dbgprofile,
       eval_file_out=FLAGS.eval_file_out,
+      eval_file_out_save_last_only=FLAGS.eval_save_last_out_only,
       eval_early_stopping_steps=FLAGS.eval_early_stopping_steps,
       eval_early_stopping_metric=FLAGS.eval_early_stopping_metric,
       eval_early_stopping_metric_delta=FLAGS.eval_early_stopping_metric_delta,

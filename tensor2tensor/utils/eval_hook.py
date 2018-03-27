@@ -32,7 +32,7 @@ class EvalFileOutHook(tf.train.SessionRunHook):
   _EVAL_NAME = "dev.out-%d"
 
 
-  def __init__(self, eval_file_out_dir, save_every_eval=True):
+  def __init__(self, eval_file_out_dir, save_last_only=True):
     """Construct EvalFileOutHook.
 
     Args:
@@ -40,9 +40,11 @@ class EvalFileOutHook(tf.train.SessionRunHook):
       save_every_eval: bool, true if keeping eval out file for every checkpoint
     """
     self.eval_file_out_dir = eval_file_out_dir
-    self.save_every_eval = save_every_eval
+    self.save_last_only = save_last_only
     self._start_step = None
     self.global_step = None
+    self.prev_checkpoint_step = None
+    self.remove_prev = False
 
   def begin(self):
     self._global_step_tensor = tf.train.get_global_step()
@@ -59,12 +61,25 @@ class EvalFileOutHook(tf.train.SessionRunHook):
     return tf.train.SessionRunArgs([self._global_step_tensor])
 
   def after_run(self, run_context, run_values):
-    self.global_step = run_values.results[0]
+    if self.global_step != run_values.results[0]:
+      self.prev_checkpoint_step = self.global_step
+      self.global_step = run_values.results[0]
+      self.remove_prev = True
 
   def end(self, session):
     out_file = self._EVAL_NAME % self.global_step
     tmp_path = os.path.join(self.eval_file_out_dir, TMP_NAME)
     out_path = os.path.join(self.eval_file_out_dir, out_file)
     os.rename(tmp_path, out_path)
+    if self.save_last_only and self.remove_prev:
+      self.remove_previous()
 
-
+  def remove_previous(self):
+    if self.prev_checkpoint_step is not None and self.prev_checkpoint_step != self.global_step:
+      prev_file = self._EVAL_NAME % self.prev_checkpoint_step
+      prev_path = os.path.join(self.eval_file_out_dir, prev_file)
+      try:
+        os.remove(prev_path)
+        self.remove_prev = False
+      except OSError:
+        tf.logging.warning('Unable to remove previous eval out: {}'.format(prev_path))
