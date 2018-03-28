@@ -72,7 +72,7 @@ def copyVocab(orig_path, target_path):
                 if len(tokens) > 1:
                     f.write("%s\n" % tokens[1])
                 else:
-                    f.write("%s\n" % tokens[0])
+                    f.write("%s\n" % line.rstrip("\r\n"))
 
 @registry.register_problem
 class TranslateGeneric(translate.TranslateProblem):
