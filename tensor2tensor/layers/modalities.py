@@ -26,7 +26,7 @@ from tensor2tensor.layers import common_layers
 from tensor2tensor.utils import expert_utils as eu
 from tensor2tensor.utils import modality
 from tensor2tensor.utils import registry
-
+from tensor2tensor.utils import bleu_hook
 import tensorflow as tf
 
 from tensorflow.python.eager import context
@@ -161,6 +161,25 @@ class SymbolModality(modality.Modality):
           return tf.reshape(
               logits, body_output_shape[:-1] + [1, self._vocab_size])
 
+
+@registry.register_symbol_modality("mrt")
+class MRTSymbolModality(SymbolModality):
+  """SymbolModality that uses Minimum Risk Training"""
+  
+  def loss(self, logits, targets):
+    ce_num, ce_den =  common_layers.padded_cross_entropy(
+      logits,
+      targets,
+      self._model_hparams.label_smoothing,
+      weights_fn=self.targets_weights_fn,
+      reduce_sum=False)
+    
+    ce_num = tf.squeeze(tf.reduce_sum(ce_num, axis=1))
+    ce_num *= self._model_hparams.mrt_alpha
+    ce_num -= tf.reduce_min(ce_num) # for stability, may not be necessary
+    true_probs = tf.exp(-ce_num)
+    return -tf.reduce_sum(true_probs), tf.reduce_sum(ce_den * true_probs)
+    
 
 @registry.register_symbol_modality("ctc")
 class CTCSymbolModality(SymbolModality):

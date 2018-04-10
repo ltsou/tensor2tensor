@@ -210,6 +210,58 @@ class Transformer(t2t_model.T2TModel):
       return self._fast_decode(
           features, decode_length, beam_size, top_beams, alpha)
 
+      
+  def _minimum_risk_sample(self, features=None, decode_length=50):
+    hparams = self._hparams
+    inputs = features["inputs"]
+    target_modality = self._problem_hparams.target_modality
+    decode_length = common_layers.shape_list(inputs)[1] + decode_length
+    with tf.variable_scope("body"):
+      encoder_output, encoder_decoder_attention_bias = self.encode(
+        inputs, features["target_space_id"], hparams, features=features)
+    if hparams.pos == "timing":
+      timing_signal = common_attention.get_timing_signal_1d(
+          decode_length + 1, hparams.hidden_size)
+      
+    def preprocess_targets(targets, i):
+      with tf.variable_scope(target_modality.name):
+        targets = target_modality.targets_bottom(targets)
+      targets = common_layers.flatten4d3d(targets)
+      if hparams.pos == "timing":
+        targets += timing_signal[:, i:i + 1]
+      return targets
+
+    decoder_self_attention_bias = (
+        common_attention.attention_bias_lower_triangle(decode_length))
+    if hparams.proximity_bias:
+      decoder_self_attention_bias += common_attention.attention_bias_proximal(
+          decode_length)
+
+    def symbols_to_logits_fn(ids, i, cache):
+      """Go from ids to logits for next symbol."""
+      ids = ids[:, -1:]
+      targets = tf.expand_dims(tf.expand_dims(ids, axis=2), axis=3)
+      targets = preprocess_targets(targets, i)
+      bias = decoder_self_attention_bias[:, :, i:i + 1, :i + 1]
+
+      with tf.variable_scope("body"):
+        body_outputs = self.decode(targets, cache["encoder_output"],
+            cache["encoder_decoder_attention_bias"], bias, hparams, cache,
+            nonpadding=features_to_nonpadding(features, "targets"))
+
+      with tf.variable_scope(target_modality.name):
+        logits = target_modality.top(body_outputs, None)
+      return tf.squeeze(logits, axis=[1, 2, 3]), cache
+
+    return fast_sample(
+      features=features,
+        encoder_output=encoder_output,
+        encoder_decoder_attention_bias=encoder_decoder_attention_bias,
+        symbols_to_logits_fn=symbols_to_logits_fn,
+        hparams=hparams,
+        decode_length=decode_length,
+        vocab_size=target_modality.top_dimensionality)
+
   def _fast_decode(self,
                    features,
                    decode_length,
@@ -245,14 +297,12 @@ class Transformer(t2t_model.T2TModel):
       raise NotImplementedError("Fast decoding only supports a single shard.")
     dp = self._data_parallelism
     hparams = self._hparams
-
     inputs = features["inputs"]
     target_modality = self._problem_hparams.target_modality
     if target_modality.is_class_modality:
       decode_length = 1
     else:
       decode_length = common_layers.shape_list(inputs)[1] + decode_length
-
     # TODO(llion): Clean up this reshaping logic.
     inputs = tf.expand_dims(inputs, axis=1)
     if len(inputs.shape) < 5:
@@ -270,7 +320,6 @@ class Transformer(t2t_model.T2TModel):
           features=features)
     encoder_output = encoder_output[0]
     encoder_decoder_attention_bias = encoder_decoder_attention_bias[0]
-
     if hparams.pos == "timing":
       timing_signal = common_attention.get_timing_signal_1d(
           decode_length + 1, hparams.hidden_size)
@@ -293,7 +342,7 @@ class Transformer(t2t_model.T2TModel):
       # _shard_features called to ensure that the variable names match
       targets = self._shard_features({"targets": targets})["targets"]
       with tf.variable_scope(target_modality.name):
-        targets = target_modality.targets_bottom_sharded(targets, dp)[0]
+        targets = target_modality.targets_bottom(targets)
       targets = common_layers.flatten4d3d(targets)
 
       # TODO(llion): Explain! Is this even needed?
@@ -328,7 +377,6 @@ class Transformer(t2t_model.T2TModel):
         logits = target_modality.top_sharded(body_outputs, None, dp)[0]
 
       return tf.squeeze(logits, axis=[1, 2, 3]), cache
-
     return fast_decode(
         encoder_output=encoder_output,
         encoder_decoder_attention_bias=encoder_decoder_attention_bias,
@@ -415,7 +463,6 @@ def fast_decode(encoder_output,
     else:
       decoded_ids = decoded_ids[:, :top_beams, 1:]
   else:  # Greedy
-
     def inner_loop(i, finished, next_id, decoded_ids, cache):
       logits, cache = symbols_to_logits_fn(next_id, i, cache)
       temperature = (0.0 if hparams.sampling_method == "argmax" else
@@ -428,7 +475,7 @@ def fast_decode(encoder_output,
 
     def is_not_finished(i, finished, *_):
       return (i < decode_length) & tf.logical_not(tf.reduce_all(finished))
-
+    
     decoded_ids = tf.zeros([batch_size, 0], dtype=tf.int64)
     finished = tf.constant(False, shape=[batch_size])
     next_id = tf.zeros([batch_size, 1], dtype=tf.int64)
@@ -442,10 +489,63 @@ def fast_decode(encoder_output,
             tf.TensorShape([None, None]),
             tf.TensorShape([None, None]),
             nest.map_structure(beam_search.get_state_shape_invariants, cache),
-        ])
+        ],
+)
     scores = None
+  return {"outputs": logits, "scores": scores}
 
-  return {"outputs": decoded_ids, "scores": scores}
+
+def fast_sample(features,
+                encoder_output,
+                encoder_decoder_attention_bias,
+                symbols_to_logits_fn,
+                hparams,
+                decode_length,
+                vocab_size,
+                eos_id=beam_search.EOS_ID):
+  batch_size = common_layers.shape_list(encoder_output)[0]
+  key_channels = hparams.attention_key_channels or hparams.hidden_size
+  value_channels = hparams.attention_value_channels or hparams.hidden_size
+  num_layers = hparams.num_decoder_layers or hparams.num_hidden_layers
+
+  cache = {
+      "layer_%d" % layer: {
+          "k": tf.zeros([batch_size, 0, key_channels]),
+          "v": tf.zeros([batch_size, 0, value_channels]),
+      }
+      for layer in range(num_layers)
+  }
+
+  cache["encoder_output"] = encoder_output
+  cache["encoder_decoder_attention_bias"] = encoder_decoder_attention_bias
+  def inner_loop(i, finished, next_id, decoded_ids, cache):
+    ids = tf.reshape(next_id, [batch_size, -1])
+    logits, cache = symbols_to_logits_fn(next_id, i, cache)
+    next_id = common_layers.sample_with_temperature(logits, hparams.sampling_temp)
+    finished |= tf.equal(next_id, eos_id)
+    next_id = tf.expand_dims(next_id, axis=1)
+    decoded_ids = tf.concat([decoded_ids, next_id], 1)
+    return i + 1, finished, next_id, decoded_ids, cache
+
+  def is_not_finished(i, finished, *_):
+    return (i < decode_length) & tf.logical_not(tf.reduce_all(finished))
+  decoded_ids = tf.zeros([batch_size, 0], dtype=tf.int64)
+  finished = tf.zeros([batch_size], dtype=tf.bool)
+  next_id = tf.zeros([batch_size, 1], dtype=tf.int64)
+  _, _, _, decoded_ids, _ = tf.while_loop(
+    is_not_finished,
+    inner_loop,
+    [tf.constant(0), finished, next_id, decoded_ids, cache],
+    shape_invariants=[
+      tf.TensorShape([]),
+      tf.TensorShape([None]),
+      tf.TensorShape([None, None]),
+      tf.TensorShape([None, None]),
+            nest.map_structure(beam_search.get_state_shape_invariants, cache),
+        ],
+  )
+
+  return decoded_ids
 
 
 @registry.register_model

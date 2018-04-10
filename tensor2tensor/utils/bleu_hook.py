@@ -163,7 +163,7 @@ uregex = UnicodeRegex()
 
 
 def bleu_tokenize(string):
-  r"""Tokenize a string following the official BLEU implementation.
+  """Tokenize a string following the official BLEU implementation.
 
   See https://github.com/moses-smt/mosesdecoder/"
            "blob/master/scripts/generic/mteval-v14.pl#L954-L983

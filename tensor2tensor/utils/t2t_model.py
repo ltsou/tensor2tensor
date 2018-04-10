@@ -23,6 +23,7 @@ import contextlib
 import copy
 import math
 import time
+import numpy as np
 
 # Dependency imports
 
@@ -35,6 +36,7 @@ from tensor2tensor.utils import beam_search
 from tensor2tensor.utils import decoding
 from tensor2tensor.utils import expert_utils as eu
 from tensor2tensor.utils import metrics
+from tensor2tensor.utils import bleu_hook
 from tensor2tensor.utils import optimize
 from tensor2tensor.utils import registry
 
@@ -107,7 +109,7 @@ class T2TModel(base.Layer):
         hparams.shared_embedding_and_softmax_weights = 0
     self._original_hparams = hparams
     self.set_mode(mode)
-
+    self.mrt_called = False
     self._decode_hparams = copy.copy(decode_hparams or
                                      decoding.decode_hparams())
     self._data_parallelism = data_parallelism or eu.Parallelism([""])
@@ -131,6 +133,7 @@ class T2TModel(base.Layer):
   def call(self, features):
     tf.get_variable_scope().set_initializer(
         optimize.get_variable_initializer(self.hparams))
+
     with self._eager_var_store.as_default():
       self._fill_problem_hparams_features(features)
       sharded_features = self._shard_features(features)
@@ -169,7 +172,7 @@ class T2TModel(base.Layer):
         losses.update(training_loss_dict)
     else:
       sharded_logits, sharded_losses = dp(self.model_fn, datashard_to_features)
-      losses = average_sharded_losses(sharded_losses)
+      losses = average_sharded_losses(sharded_losses)      
 
     # TODO(rsepassi): Reenable scheduled sampling
     # Disabled because of model_fn_sharded refactor
@@ -186,20 +189,22 @@ class T2TModel(base.Layer):
     return sharded_logits, losses
 
   def model_fn(self, features):
+    original_targets = features['targets']
     transformed_features = self.bottom(features)
-
     with tf.variable_scope("body"):
       tf.logging.info("Building model body")
       body_out = self.body(transformed_features)
-    output, losses = self._normalize_body_output(body_out)
-
-    if "training" in losses:
-      tf.logging.info("Skipping T2TModel top and loss because training loss "
-                      "returned from body")
-      logits = output
-    else:
-      logits = self.top(output, features)
-      losses["training"] = self.loss(logits, features)
+      output, losses = self._normalize_body_output(body_out)
+      if "training" in losses:
+        tf.logging.info("Skipping T2TModel top and loss because training loss "
+                          "returned from body")
+        logits = output
+      else:
+        logits = self.top(output, features)
+        losses["training"] = self.loss(logits, features)
+    if not self.mrt_called and self.hparams.mode == tf.estimator.ModeKeys.TRAIN:
+      self.mrt_called = True
+      losses = self.minimum_risk_training(transformed_features, original_targets, losses)
     return logits, losses
 
   def bottom(self, features):
@@ -223,6 +228,7 @@ class T2TModel(base.Layer):
 
     # Transform the targets (for autoregressive models)
     target_modality = self._problem_hparams.target_modality
+
     with tf.variable_scope(target_modality.name):
       tf.logging.info("Transforming 'targets' with %s.targets_bottom",
                       target_modality.name)
@@ -288,6 +294,7 @@ class T2TModel(base.Layer):
               tf.constant(1., dtype=tf.float32))
 
     target_modality = self._problem_hparams.target_modality
+
     loss_num, loss_den = target_modality.loss(logits, features["targets"])
     loss_num *= self._problem_hparams.loss_multiplier
     return loss_num, loss_den
@@ -358,6 +365,62 @@ class T2TModel(base.Layer):
   def prepare_features_for_infer(self, features):
     """Called before inference to allow adding infer-specific features."""
     pass
+
+  def minimum_risk_training(self, features, targets, losses):
+    """
+    args:
+    features: transformed_features passed through bottom of model
+    losses: losses output from main model body
+    decode_length: additional steps for decoding
+    """
+    assert self.hparams.sampling_method == "random"
+    self.set_mode(tf.estimator.ModeKeys.PREDICT)
+    targets = tf.squeeze(targets)
+    decode_length = self.hparams.mrt_decode_length
+    with tf.variable_scope("samples", reuse=tf.AUTO_REUSE):
+      features["inputs"] = tf.tile(features["inputs"], [self.hparams.mrt_sample_num, 1, 1, 1])
+      samples = self._minimum_risk_sample(features, decode_length=decode_length)
+      samples = tf.cast(samples, tf.int32)
+      # pad gold reference, add it to samples
+      target_size = common_layers.shape_list(targets)
+      pad_len = common_layers.shape_list(samples)[1] - target_size[1]
+      padding = tf.zeros((target_size[0], pad_len), dtype=tf.int32)
+      padded_target = tf.concat([targets, padding], axis=1)
+      samples = tf.concat([samples, padded_target], axis=0)
+      tiled_targets = tf.tile(targets, [self.hparams.mrt_sample_num + 1, 1])
+
+      bleu = tf.py_func(self._get_unique_bleu, [samples, tiled_targets], tf.float32)
+      bleu.set_shape(())
+      self._get_mrt_loss(losses, bleu)
+    return losses
+  
+  def _get_mrt_loss(self, losses, bleu):
+    # losses maps 'training' to num / den probability scalars (if mrt modality is used)
+    # bleu is a scalar (0<bleu<1)
+    prob_num, prob_den = losses['training']
+    prob_num *= bleu
+    losses['training'] = (prob_num, prob_den)
+
+  def _get_unique_bleu(self, samples, targets):
+    sample_set = set()
+    refs = []
+    hyps = []
+    for idx, sample in enumerate(samples):
+      target = targets[idx]
+      sample_str = str(sample)
+      if sample_str not in sample_set:
+        sample_set.add(sample_str)
+        hyps.append(sample)
+        refs.append(target)
+    bleu = bleu_hook.compute_bleu(refs, hyps)
+    return bleu
+    
+  def _minimum_risk_sample(self, features=None, decode_length=20):
+    """
+    Return sampled logits corresponding to features
+    """
+    outputs = self._greedy_infer(features, decode_length)
+    return outputs['logits']
 
   def eval_autoregressive(self, features=None, decode_length=50):
     """Autoregressive eval.
@@ -438,7 +501,7 @@ class T2TModel(base.Layer):
 
       return results
 
-  def _beam_decode(self, features, decode_length, beam_size, top_beams, alpha):
+  def _beam_decode(self, features, decode_length, beam_size, top_beams, alpha, back_prop=False):
     """Beam search decoding.
 
     Models should ideally implement a more efficient version of this function.
@@ -572,6 +635,7 @@ class T2TModel(base.Layer):
     Args:
       features: an map of string to `Tensor`
       decode_length: an integer.  How many additional timesteps to decode.
+      back_prop: bool, true if backpropagating gradients
 
     Returns:
       A dict of decoding results {
