@@ -378,28 +378,32 @@ class T2TModel(base.Layer):
     targets = tf.squeeze(targets)
     decode_length = self.hparams.mrt_decode_length
     with tf.variable_scope("samples", reuse=tf.AUTO_REUSE):
-      features["inputs"] = tf.tile(features["inputs"], [self.hparams.mrt_sample_num, 1, 1, 1])
       samples = self._minimum_risk_sample(features, decode_length=decode_length)
       samples = tf.cast(samples, tf.int32)
       # pad gold reference, add it to samples
-      target_size = common_layers.shape_list(targets)
-      pad_len = common_layers.shape_list(samples)[1] - target_size[1]
-      padding = tf.zeros((target_size[0], pad_len), dtype=tf.int32)
-      padded_target = tf.concat([targets, padding], axis=1)
-      samples = tf.concat([samples, padded_target], axis=0)
+      samples = self._add_reference(samples, targets)
       tiled_targets = tf.tile(targets, [self.hparams.mrt_sample_num + 1, 1])
 
-      bleu = tf.py_func(self._get_unique_bleu, [samples, tiled_targets], tf.float32)
-      bleu.set_shape(())
-      self._get_mrt_loss(losses, bleu)
+      bleu = None# tf.py_func(self._get_unique_bleu, [samples, tiled_targets], tf.float32)
+      #bleu.set_shape(())
+      self._get_mrt_loss(losses, samples, bleu)
     return losses
   
-  def _get_mrt_loss(self, losses, bleu):
+  def _add_reference(self, samples, targets):
+    target_size = common_layers.shape_list(targets)
+    pad_len = common_layers.shape_list(samples)[1] - target_size[1]
+    padding = tf.zeros((target_size[0], pad_len), dtype=tf.int32)
+    padded_target = tf.concat([targets, padding], axis=1)
+    samples = tf.concat([samples, padded_target], axis=0)
+    return samples
+
+  def _get_mrt_loss(self, losses, samples, bleu):
     # losses maps 'training' to num / den probability scalars (if mrt modality is used)
     # bleu is a scalar (0<bleu<1)
     prob_num, prob_den = losses['training']
-    prob_num *= bleu
-    losses['training'] = (prob_num, prob_den)
+    highloss = tf.log(tf.to_float(tf.reduce_sum(samples)))
+    #prob_num *= bleu
+    losses['training'] = (prob_num + highloss, prob_den)
 
   def _get_unique_bleu(self, samples, targets):
     sample_set = set()

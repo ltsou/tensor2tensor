@@ -213,8 +213,9 @@ def basic_params1():
       force_full_predict=False,
       # Set this for pure model parallelism.  There is only one data shard.
       no_data_parallelism=False,
-      mrt_decode_length=20,
-      mrt_sample_num=4,
+      minimum_risk_train=False,
+      mrt_decode_length=10,
+      mrt_sample_num=20,
       mrt_alpha= 0.005,
   )
 

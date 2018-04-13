@@ -47,6 +47,7 @@ class Transformer(t2t_model.T2TModel):
   def __init__(self, *args, **kwargs):
     super(Transformer, self).__init__(*args, **kwargs)
     self.attention_weights = dict()  # For vizualizing attention heads.
+    self.mrt_cache = dict()
 
   def encode(self, inputs, target_space, hparams, features=None):
     """Encode transformer inputs.
@@ -152,7 +153,10 @@ class Transformer(t2t_model.T2TModel):
       target_space = features["target_space_id"]
       encoder_output, encoder_decoder_attention_bias = self.encode(
           inputs, target_space, hparams, features=features)
-
+      if not self.mrt_cache:
+        self.mrt_cache['encoder_output'] = encoder_output
+        self.mrt_cache['encoder_decoder_attention_bias'] = encoder_decoder_attention_bias
+      
     targets = features["targets"]
     targets = common_layers.flatten4d3d(targets)
 
@@ -216,12 +220,20 @@ class Transformer(t2t_model.T2TModel):
     inputs = features["inputs"]
     target_modality = self._problem_hparams.target_modality
     decode_length = common_layers.shape_list(inputs)[1] + decode_length
-    with tf.variable_scope("body"):
-      encoder_output, encoder_decoder_attention_bias = self.encode(
-        inputs, features["target_space_id"], hparams, features=features)
+    if not self.mrt_cache:
+      with tf.variable_scope("body"):
+        encoder_output, encoder_decoder_attention_bias = self.encode(
+          inputs, features["target_space_id"], hparams, features=features)
+        self.mrt_cache['encoder_output'] = encoder_output
+        self.mrt_cache['encoder_decoder_attention_bias'] = encoder_decoder_attention_bias
+    else:
+      encoder_output = self.mrt_cache['encoder_output']
+      encoder_decoder_attention_bias = self.mrt_cache['encoder_decoder_attention_bias']
+      tf.logging.info('using cached info: {} {}'.format(encoder_output, encoder_decoder_attention_bias))
+
     if hparams.pos == "timing":
       timing_signal = common_attention.get_timing_signal_1d(
-          decode_length + 1, hparams.hidden_size)
+        decode_length + 1, hparams.hidden_size)
       
     def preprocess_targets(targets, i):
       with tf.variable_scope(target_modality.name):
@@ -260,7 +272,8 @@ class Transformer(t2t_model.T2TModel):
         symbols_to_logits_fn=symbols_to_logits_fn,
         hparams=hparams,
         decode_length=decode_length,
-        vocab_size=target_modality.top_dimensionality)
+        vocab_size=target_modality.top_dimensionality,
+        sample_num=self.hparams.mrt_sample_num)
 
   def _fast_decode(self,
                    features,
@@ -502,6 +515,7 @@ def fast_sample(features,
                 hparams,
                 decode_length,
                 vocab_size,
+                sample_num,
                 eos_id=beam_search.EOS_ID):
   batch_size = common_layers.shape_list(encoder_output)[0]
   key_channels = hparams.attention_key_channels or hparams.hidden_size
@@ -520,7 +534,12 @@ def fast_sample(features,
   cache["encoder_decoder_attention_bias"] = encoder_decoder_attention_bias
   def inner_loop(i, finished, next_id, decoded_ids, cache):
     ids = tf.reshape(next_id, [batch_size, -1])
-    logits, cache = symbols_to_logits_fn(next_id, i, cache)
+    flat_cache = nest.map_structure(beam_search._merge_beam_dim, cache)
+    logits, flat_cache = symbols_to_logits_fn(next_id, i, flat_cache)
+    cache = nest.map_structure(
+          lambda t: beam_search._unmerge_beam_dim(t, batch_size, sample_num), flat_cache)
+
+
     next_id = common_layers.sample_with_temperature(logits, hparams.sampling_temp)
     finished |= tf.equal(next_id, eos_id)
     next_id = tf.expand_dims(next_id, axis=1)
@@ -529,9 +548,18 @@ def fast_sample(features,
 
   def is_not_finished(i, finished, *_):
     return (i < decode_length) & tf.logical_not(tf.reduce_all(finished))
+  '''
   decoded_ids = tf.zeros([batch_size, 0], dtype=tf.int64)
   finished = tf.zeros([batch_size], dtype=tf.bool)
   next_id = tf.zeros([batch_size, 1], dtype=tf.int64)
+  '''
+  decoded_ids = tf.tile(tf.zeros([batch_size, 0], dtype=tf.int64), [sample_num, 1])
+  finished = tf.zeros([batch_size * sample_num], dtype=tf.bool)
+  next_id = tf.tile(tf.zeros([batch_size, 1], dtype=tf.int64), [sample_num, 1])
+  cache = nest.map_structure(
+        lambda t: beam_search._expand_to_beam_size(t, sample_num), cache)
+
+  
   _, _, _, decoded_ids, _ = tf.while_loop(
     is_not_finished,
     inner_loop,
