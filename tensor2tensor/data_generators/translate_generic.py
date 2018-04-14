@@ -213,7 +213,7 @@ class TranslateGenericSubwordToChar(TranslateGeneric):
   def feature_encoders(self, data_dir):
     source_vocab_filename = os.path.join(data_dir, self.source_vocab_name)
     target_vocab_filename = os.path.join(data_dir, self.target_vocab_name)
-    source_encoder = text_encoder.SubwordTextEncoder(source_vocab_filename, replace_oov="<unk>")
+    source_encoder = text_encoder.SubwordTextEncoder(source_vocab_filename)
     target_encoder = text_encoder.CharacterTextEncoder(target_vocab_filename, replace_oov="<unk>")
     return {"inputs": source_encoder, "targets": target_encoder}
 
@@ -254,7 +254,7 @@ class TranslateGenericCharToSubword(TranslateGeneric):
     source_vocab_filename = os.path.join(data_dir, self.source_vocab_name)
     target_vocab_filename = os.path.join(data_dir, self.target_vocab_name)
     source_encoder = text_encoder.CharacterTextEncoder(source_vocab_filename, replace_oov="<unk>")
-    target_encoder = text_encoder.SubwordTextEncoder(target_vocab_filename, replace_oov="<unk>")
+    target_encoder = text_encoder.SubwordTextEncoder(target_vocab_filename)
     return {"inputs": source_encoder, "targets": target_encoder}
 
   def generator(self, data_dir, tmp_dir, train):
