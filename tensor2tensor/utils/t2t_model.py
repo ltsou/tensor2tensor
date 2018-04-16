@@ -378,7 +378,7 @@ class T2TModel(base.Layer):
     targets = tf.squeeze(targets)
     decode_length = self.hparams.mrt_decode_length
     with tf.variable_scope("samples", reuse=tf.AUTO_REUSE):
-      samples = self._minimum_risk_sample(features, decode_length=decode_length)
+      samples, log_probs = self._minimum_risk_sample(features, decode_length=decode_length)
       samples = tf.cast(samples, tf.int32)
       # pad gold reference, add it to samples
       samples = self._add_reference(samples, targets)
@@ -386,7 +386,7 @@ class T2TModel(base.Layer):
 
       bleu = None# tf.py_func(self._get_unique_bleu, [samples, tiled_targets], tf.float32)
       #bleu.set_shape(())
-      self._get_mrt_loss(losses, samples, bleu)
+      self._get_mrt_loss(losses, samples, log_probs, bleu)
     return losses
   
   def _add_reference(self, samples, targets):
@@ -397,13 +397,15 @@ class T2TModel(base.Layer):
     samples = tf.concat([samples, padded_target], axis=0)
     return samples
 
-  def _get_mrt_loss(self, losses, samples, bleu):
-    # losses maps 'training' to num / den probability scalars (if mrt modality is used)
-    # bleu is a scalar (0<bleu<1)
-    prob_num, prob_den = losses['training']
-    highloss = tf.log(tf.to_float(tf.reduce_sum(samples)))
+  def _get_mrt_loss(self, losses, samples, log_probs, bleu):
+    #prob_num, prob_den = losses['training']
+    log_probs *= self.hparams.mrt_alpha
+    log_probs -= tf.reduce_min(log_probs)
+    probs = tf.exp(-log_probs)
+    prob_num = tf.reduce_sum(probs)
+    prob_den = np.float32(1.0)
     #prob_num *= bleu
-    losses['training'] = (prob_num + highloss, prob_den)
+    losses['training'] = (prob_num, prob_den)
 
   def _get_unique_bleu(self, samples, targets):
     sample_set = set()

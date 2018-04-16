@@ -229,7 +229,6 @@ class Transformer(t2t_model.T2TModel):
     else:
       encoder_output = self.mrt_cache['encoder_output']
       encoder_decoder_attention_bias = self.mrt_cache['encoder_decoder_attention_bias']
-      tf.logging.info('using cached info: {} {}'.format(encoder_output, encoder_decoder_attention_bias))
 
     if hparams.pos == "timing":
       timing_signal = common_attention.get_timing_signal_1d(
@@ -532,48 +531,50 @@ def fast_sample(features,
 
   cache["encoder_output"] = encoder_output
   cache["encoder_decoder_attention_bias"] = encoder_decoder_attention_bias
-  def inner_loop(i, finished, next_id, decoded_ids, cache):
+  def inner_loop(i, finished, next_id, decoded_ids, log_probs, cache):
     ids = tf.reshape(next_id, [batch_size, -1])
     flat_cache = nest.map_structure(beam_search._merge_beam_dim, cache)
     logits, flat_cache = symbols_to_logits_fn(next_id, i, flat_cache)
     cache = nest.map_structure(
           lambda t: beam_search._unmerge_beam_dim(t, batch_size, sample_num), flat_cache)
 
-
     next_id = common_layers.sample_with_temperature(logits, hparams.sampling_temp)
+    all_log_probs = logits - tf.reduce_logsumexp(logits, axis=1, keepdims=True)
+    batch_ids = tf.cast(tf.range(batch_size * sample_num), tf.int64)
+    scores_to_gather = tf.stack([batch_ids, next_id], axis=1)
+    sample_log_probs = tf.gather_nd(all_log_probs, scores_to_gather)
+
     finished |= tf.equal(next_id, eos_id)
     next_id = tf.expand_dims(next_id, axis=1)
     decoded_ids = tf.concat([decoded_ids, next_id], 1)
-    return i + 1, finished, next_id, decoded_ids, cache
+    log_probs += sample_log_probs
+    return i + 1, finished, next_id, decoded_ids, log_probs, cache
 
   def is_not_finished(i, finished, *_):
     return (i < decode_length) & tf.logical_not(tf.reduce_all(finished))
-  '''
-  decoded_ids = tf.zeros([batch_size, 0], dtype=tf.int64)
-  finished = tf.zeros([batch_size], dtype=tf.bool)
-  next_id = tf.zeros([batch_size, 1], dtype=tf.int64)
-  '''
+
   decoded_ids = tf.tile(tf.zeros([batch_size, 0], dtype=tf.int64), [sample_num, 1])
+  log_probs = tf.zeros([batch_size * sample_num], dtype=tf.float32)
   finished = tf.zeros([batch_size * sample_num], dtype=tf.bool)
   next_id = tf.tile(tf.zeros([batch_size, 1], dtype=tf.int64), [sample_num, 1])
   cache = nest.map_structure(
         lambda t: beam_search._expand_to_beam_size(t, sample_num), cache)
 
-  
-  _, _, _, decoded_ids, _ = tf.while_loop(
+  _, _, _, decoded_ids, log_probs, _ = tf.while_loop(
     is_not_finished,
     inner_loop,
-    [tf.constant(0), finished, next_id, decoded_ids, cache],
+    [tf.constant(0), finished, next_id, decoded_ids, log_probs, cache],
     shape_invariants=[
       tf.TensorShape([]),
       tf.TensorShape([None]),
       tf.TensorShape([None, None]),
       tf.TensorShape([None, None]),
+      tf.TensorShape([None]),
             nest.map_structure(beam_search.get_state_shape_invariants, cache),
         ],
   )
 
-  return decoded_ids
+  return decoded_ids, log_probs
 
 
 @registry.register_model
