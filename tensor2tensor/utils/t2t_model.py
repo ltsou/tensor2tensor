@@ -380,13 +380,11 @@ class T2TModel(base.Layer):
     with tf.variable_scope("samples", reuse=tf.AUTO_REUSE):
       samples, log_probs = self._minimum_risk_sample(features, decode_length=decode_length)
       samples = tf.cast(samples, tf.int32)
-      # pad gold reference, add it to samples
-      samples = self._add_reference(samples, targets)
-      tiled_targets = tf.tile(targets, [self.hparams.mrt_sample_num + 1, 1])
-
-      bleu = None# tf.py_func(self._get_unique_bleu, [samples, tiled_targets], tf.float32)
-      #bleu.set_shape(())
-      self._get_mrt_loss(losses, samples, log_probs, bleu)
+      #samples = self._add_reference(samples, targets)
+      tiled_targets = tf.tile(targets, [self.hparams.mrt_sample_num, 1])
+      sentence_bleus = tf.py_func(self._get_sentence_bleu, [samples, tiled_targets], tf.float32)
+      sentence_bleus.set_shape([None])
+      self._get_mrt_loss(losses, log_probs, sentence_bleus)
     return losses
   
   def _add_reference(self, samples, targets):
@@ -397,30 +395,68 @@ class T2TModel(base.Layer):
     samples = tf.concat([samples, padded_target], axis=0)
     return samples
 
-  def _get_mrt_loss(self, losses, samples, log_probs, bleu):
-    #prob_num, prob_den = losses['training']
+  def _get_mrt_loss(self, losses, log_probs, bleus):
+    """
+    losses: dictionary to contain the loss numerator and denominator
+    log_probs: [batch_size * sample_num] tensor containing log probs of samples
+    bleus: [batch_size * sample_num] list of scalars. Duplicate samples (which are 
+           ignored by MRT) have a bleu of -1
+    """
+    if self.hparams.mrt_use_ref_score:
+      ref_loss_probs, _ = losses['training'] # acts as regulariser, since ref bleu is always 1
+    else:
+      ref_loss_probs = 0.0
     log_probs *= self.hparams.mrt_alpha
     log_probs -= tf.reduce_min(log_probs)
     probs = tf.exp(-log_probs)
-    prob_num = tf.reduce_sum(probs)
-    prob_den = np.float32(1.0)
-    #prob_num *= bleu
-    losses['training'] = (prob_num, prob_den)
+    duplicate_mask = tf.cast(tf.greater_equal(bleus, tf.zeros_like(bleus)), tf.float32)
+    probs *= duplicate_mask
+    prob_num = tf.reduce_sum(probs * bleus) + ref_loss_probs
+    prob_den = tf.reduce_sum(probs) + ref_loss_probs
+    losses['training'] = (-prob_num, prob_den)
 
-  def _get_unique_bleu(self, samples, targets):
+  def _get_sentence_bleu(self, samples, targets, max_order=4):
     sample_set = set()
-    refs = []
-    hyps = []
+    sentence_bleus = []
     for idx, sample in enumerate(samples):
       target = targets[idx]
       sample_str = str(sample)
       if sample_str not in sample_set:
         sample_set.add(sample_str)
-        hyps.append(sample)
-        refs.append(target)
-    bleu = bleu_hook.compute_bleu(refs, hyps)
-    return bleu
+        precisions = max_order * [0.0]
+        matches_by_order = max_order * [0]
+        ref_ngrams_by_order = max_order * [0]
+        hyp = decoding._save_until_eos(sample, is_image=False)
+        ref = decoding._save_until_eos(target, is_image=False)
+        self._get_ngram_matches(hyp, ref, matches_by_order, ref_ngrams_by_order, max_order)
+        smooth = 1.0
+        for i in xrange(max_order):
+          if ref_ngrams_by_order[i]:
+            if matches_by_order[i]:
+              precisions[i] = matches_by_order[i] / ref_ngrams_by_order[i]
+            elif self.hparams.mrt_bleu_smooth:
+              smooth *= 2
+              precisions[i] = 1.0 / (smooth * ref_ngrams_by_order[i])
+        bleu = math.exp(sum(math.log(p) for p in precisions if p) / max_order)
+        if self.hparams.mrt_use_bleu_bp:
+          ratio = len(hyp) / len(ref)
+          bp = math.exp(1 - 1. / ratio) if ratio < 1.0 else 1.0
+          bleu *= bp
+        sentence_bleus.append(bleu)
+      else:
+        sentence_bleus.append(-1.0)
+    #tf.logging.info(sentence_bleus)
+    return np.asarray(sentence_bleus, dtype=np.float32)
     
+  def _get_ngram_matches(self, hyp, ref, matches_by_order, ref_ngrams_by_order, max_order):
+    hyp_ngrams = bleu_hook._get_ngrams(hyp, max_order)
+    ref_ngrams = bleu_hook._get_ngrams(ref, max_order)
+    for ngram, count in ref_ngrams.items():
+      ref_ngrams_by_order[len(ngram) - 1] += count
+      if hyp_ngrams[ngram] > 0:
+        matches_by_order[len(ngram) - 1] += min(count, hyp_ngrams[ngram])
+    
+        
   def _minimum_risk_sample(self, features=None, decode_length=20):
     """
     Return sampled logits corresponding to features

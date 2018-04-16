@@ -216,7 +216,11 @@ def basic_params1():
       minimum_risk_train=False,
       mrt_decode_length=10,
       mrt_sample_num=20,
-      mrt_alpha= 0.005,
+      mrt_alpha=0.005,
+      mrt_use_bleu_bp=True,
+      # NIST bleu smoothing for sentence-level ngram counts
+      mrt_bleu_smooth=True,
+      mrt_use_ref_score=True,
   )
 
 

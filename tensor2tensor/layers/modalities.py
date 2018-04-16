@@ -176,9 +176,10 @@ class MRTSymbolModality(SymbolModality):
     
     ce_num = tf.squeeze(tf.reduce_sum(ce_num, axis=1))
     ce_num *= self._model_hparams.mrt_alpha
-    ce_num -= tf.reduce_min(ce_num) # for stability, may not be necessary
+    ce_num /= tf.reduce_sum(ce_den)
+    ce_num -= tf.reduce_min(ce_num)  # for stability, may not be necessary
     true_probs = tf.exp(-ce_num)
-    return -tf.reduce_sum(true_probs), tf.reduce_sum(ce_den * true_probs)
+    return tf.reduce_sum(true_probs), tf.reduce_sum(ce_den * true_probs)
     
 
 @registry.register_symbol_modality("ctc")
