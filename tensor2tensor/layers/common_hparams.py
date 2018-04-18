@@ -221,6 +221,7 @@ def basic_params1():
       # NIST bleu smoothing for sentence-level ngram counts
       mrt_bleu_smooth=True,
       mrt_use_ref_score=True,
+      mrt_use_negative_loss=True,
   )
 
 

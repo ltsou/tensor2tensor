@@ -382,12 +382,13 @@ class T2TModel(base.Layer):
       samples = tf.cast(samples, tf.int32)
       #samples = self._add_reference(samples, targets)
       tiled_targets = tf.tile(targets, [self.hparams.mrt_sample_num, 1])
-      sentence_bleus = tf.py_func(self._get_sentence_bleu, [samples, tiled_targets], tf.float32)
+      sentence_bleus = tf.py_func(self._get_sentence_bleu, [samples, tiled_targets, log_probs], tf.float32)
       sentence_bleus.set_shape([None])
       self._get_mrt_loss(losses, log_probs, sentence_bleus)
     return losses
   
   def _add_reference(self, samples, targets):
+    # !! May not be needed
     target_size = common_layers.shape_list(targets)
     pad_len = common_layers.shape_list(samples)[1] - target_size[1]
     padding = tf.zeros((target_size[0], pad_len), dtype=tf.int32)
@@ -397,25 +398,31 @@ class T2TModel(base.Layer):
 
   def _get_mrt_loss(self, losses, log_probs, bleus):
     """
-    losses: dictionary to contain the loss numerator and denominator
-    log_probs: [batch_size * sample_num] tensor containing log probs of samples
+    losses: dictionary containing the loss numerator and denominator for training-mode logits
+    log_probs: [batch_size * sample_num] tensor containing negative log probs of samples
     bleus: [batch_size * sample_num] list of scalars. Duplicate samples (which are 
            ignored by MRT) have a bleu of -1
     """
-    if self.hparams.mrt_use_ref_score:
-      ref_loss_probs, _ = losses['training'] # acts as regulariser, since ref bleu is always 1
+    if self.hparams.mrt_use_ref_score and not self.hparams.mrt_use_negative_loss:
+      tf.logging.warning('If using loss bleu (1-BLEU) for MRT, reference scores with BLEU=1 will be ignored')
+
+    if self.hparams.mrt_use_ref_score and self.hparams.mrt_use_negative_loss:
+      ref_loss = -losses['training'][0] # NB ref bleu is always 1
     else:
-      ref_loss_probs = 0.0
+      ref_loss = 0.0
     log_probs *= self.hparams.mrt_alpha
-    log_probs -= tf.reduce_min(log_probs)
-    probs = tf.exp(-log_probs)
+    probs = tf.exp(log_probs)
     duplicate_mask = tf.cast(tf.greater_equal(bleus, tf.zeros_like(bleus)), tf.float32)
     probs *= duplicate_mask
-    prob_num = tf.reduce_sum(probs * bleus) + ref_loss_probs
-    prob_den = tf.reduce_sum(probs) + ref_loss_probs
-    losses['training'] = (-prob_num, prob_den)
+    if self.hparams.mrt_use_negative_loss:
+      loss_bleus = -bleus
+    else:
+      loss_bleus = tf.ones_like(bleus) - bleus
+    prob_num = tf.reduce_sum(probs * loss_bleus) + ref_loss
+    prob_den = tf.reduce_sum(probs) + ref_loss
+    losses['training'] = (prob_num, prob_den)
 
-  def _get_sentence_bleu(self, samples, targets, max_order=4):
+  def _get_sentence_bleu(self, samples, targets, log_probs, max_order=4):
     sample_set = set()
     sentence_bleus = []
     for idx, sample in enumerate(samples):
@@ -444,6 +451,7 @@ class T2TModel(base.Layer):
           bleu *= bp
         sentence_bleus.append(bleu)
       else:
+        # flag duplicate sentences to be masked in loss function
         sentence_bleus.append(-1.0)
     #tf.logging.info(sentence_bleus)
     return np.asarray(sentence_bleus, dtype=np.float32)

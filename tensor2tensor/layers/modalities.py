@@ -26,7 +26,7 @@ from tensor2tensor.layers import common_layers
 from tensor2tensor.utils import expert_utils as eu
 from tensor2tensor.utils import modality
 from tensor2tensor.utils import registry
-from tensor2tensor.utils import bleu_hook
+from tensor2tensor.utils import beam_search
 import tensorflow as tf
 
 from tensorflow.python.eager import context
@@ -167,19 +167,22 @@ class MRTSymbolModality(SymbolModality):
   """SymbolModality that uses Minimum Risk Training"""
   
   def loss(self, logits, targets):
-    ce_num, ce_den =  common_layers.padded_cross_entropy(
-      logits,
-      targets,
-      self._model_hparams.label_smoothing,
-      weights_fn=self.targets_weights_fn,
-      reduce_sum=False)
-    
-    ce_num = tf.squeeze(tf.reduce_sum(ce_num, axis=1))
-    ce_num *= self._model_hparams.mrt_alpha
-    ce_num /= tf.reduce_sum(ce_den)
-    ce_num -= tf.reduce_min(ce_num)  # for stability, may not be necessary
-    true_probs = tf.exp(-ce_num)
-    return tf.reduce_sum(true_probs), tf.reduce_sum(ce_den * true_probs)
+    target_shape = common_layers.shape_list(targets)
+    batch_size = target_shape[0]
+    timesteps = target_shape[1]
+    reshaped_logits = tf.reshape(logits, [batch_size, timesteps, -1])
+    log_probs = beam_search.log_prob_from_logits(reshaped_logits)
+    ids = tf.reshape(targets, [batch_size, -1, 1])
+    batch_ids = tf.expand_dims(beam_search.compute_batch_indices(batch_size, timesteps), -1)
+    pos_ids = tf.reshape(tf.tile(tf.expand_dims(tf.range(timesteps), -1), [batch_size, 1]), 
+                         [batch_size, -1, 1])
+    gather_ids = tf.concat([batch_ids, pos_ids, ids], axis=2)
+    sentence_tok_log_probs = tf.gather_nd(log_probs, gather_ids) # shape: [batch_size, timesteps]
+    weights = self.targets_weights_fn(tf.squeeze(targets))
+    sentence_neg_log_probs = tf.reduce_sum(weights * sentence_tok_log_probs, axis=1)
+    sentence_neg_log_probs *= self._model_hparams.mrt_alpha
+    sentence_probs = tf.exp(sentence_neg_log_probs)
+    return tf.reduce_sum(sentence_probs), tf.reduce_sum(weights)
     
 
 @registry.register_symbol_modality("ctc")
