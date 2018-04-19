@@ -23,6 +23,7 @@ from __future__ import print_function
 import numpy as np
 
 from tensor2tensor.utils import yellowfin
+from tensor2tensor.utils import largebatch_optimizer
 
 import tensorflow as tf
 
@@ -86,6 +87,13 @@ class ConditionalOptimizer(tf.train.Optimizer):
           beta1=hparams.optimizer_adam_beta1,
           beta2=hparams.optimizer_adam_beta2,
           epsilon=hparams.optimizer_adam_epsilon)
+    elif optimizer_name == "LargebatchAdam":
+      self._opt = largebatch_optimizer.LargebatchAdamOptimizer(
+          lr / 500.0,
+          beta1=hparams.optimizer_adam_beta1,
+          beta2=hparams.optimizer_adam_beta2,
+          epsilon=hparams.optimizer_adam_epsilon,
+          n=hparams.fake_gpu_multiplier)
     elif optimizer_name == "Momentum":
       self._opt = tf.train.MomentumOptimizer(
           lr,
@@ -145,11 +153,20 @@ def piecewise_learning_rate(step, boundaries, values):
       step, boundaries, values, name="piecewise_lr")
 
 
-def learning_rate_decay(hparams, warmup_steps=0):
-  """Learning rate decay multiplier."""
+def learning_rate_decay(hparams, warmup_steps=0, num_worker_replicas=1, num_train_steps=1):
+  """Inverse-decay learning rate until warmup_steps, then decay."""
   scheme = hparams.learning_rate_decay_scheme
-  warmup_steps = tf.to_float(warmup_steps)
+  warmup_steps = tf.to_float(warmup_steps * num_worker_replicas)
   global_step = tf.to_float(tf.train.get_or_create_global_step())
+  try:
+    if hparams.fake_gpu_multiplier > 1:
+      tf.logging.info("Scaling down learning rate decay by "
+                      "fake_gpu_multiplier=%d" % hparams.fake_gpu_multiplier)
+      fake_gpu_multiplier = tf.constant(hparams.fake_gpu_multiplier,
+                                        dtype=tf.float32)
+      global_step = global_step / fake_gpu_multiplier
+  except AttributeError:
+    pass
 
   if not scheme or scheme == "none":
     return tf.constant(1.)
@@ -167,7 +184,7 @@ def learning_rate_decay(hparams, warmup_steps=0):
     return piecewise_learning_rate(global_step,
                                    hparams.learning_rate_boundaries,
                                    hparams.learning_rate_multiples)
-
+    
   if scheme == "noam":
     return 5000.0 * hparams.hidden_size**-0.5 * tf.minimum(
         (global_step + 1) * warmup_steps**-1.5, (global_step + 1)**-0.5)

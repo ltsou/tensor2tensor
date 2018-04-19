@@ -51,6 +51,7 @@ def checkpoint_exists(path):
 
 
 def main(_):
+  tf.logging.set_verbosity(tf.logging.INFO)
   if FLAGS.checkpoints:
     # Get the checkpoints list from flags and run some basic checks.
     checkpoints = [c.strip() for c in FLAGS.checkpoints.split(",")]

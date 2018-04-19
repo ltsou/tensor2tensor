@@ -170,6 +170,11 @@ def data_parallelism(daisy_chain_variables=True,
     else:
       datashard_devices = [_replica_device_setter(worker_job)]
       caching_devices = None
+  try:
+    if hparams.no_caching_devices:
+      caching_devices = None
+  except:
+    pass
   tf.logging.info("datashard_devices: %s", datashard_devices)
   tf.logging.info("caching_devices: %s", caching_devices)
   tf.logging.info("ps_devices: %s", ps_devices(all_workers=all_workers))
