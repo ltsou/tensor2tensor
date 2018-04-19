@@ -182,7 +182,7 @@ class MRTSymbolModality(SymbolModality):
     sentence_neg_log_probs = tf.reduce_sum(weights * sentence_tok_log_probs, axis=1)
     sentence_neg_log_probs *= self._model_hparams.mrt_alpha
     sentence_probs = tf.exp(sentence_neg_log_probs)
-    return tf.reduce_sum(sentence_probs), tf.reduce_sum(weights)
+    return sentence_probs, tf.reduce_sum(weights)
     
 
 @registry.register_symbol_modality("ctc")

@@ -375,85 +375,77 @@ class T2TModel(base.Layer):
     """
     assert self.hparams.sampling_method == "random"
     self.set_mode(tf.estimator.ModeKeys.PREDICT)
-    targets = tf.squeeze(targets)
     decode_length = self.hparams.mrt_decode_length
     with tf.variable_scope("samples", reuse=tf.AUTO_REUSE):
       samples, log_probs = self._minimum_risk_sample(features, decode_length=decode_length)
       samples = tf.cast(samples, tf.int32)
-      #samples = self._add_reference(samples, targets)
-      tiled_targets = tf.tile(targets, [self.hparams.mrt_sample_num, 1])
-      sentence_bleus = tf.py_func(self._get_sentence_bleu, [samples, tiled_targets, log_probs], tf.float32)
-      sentence_bleus.set_shape([None])
+      targets = tf.squeeze(targets)
+      sentence_bleus = tf.py_func(self._get_sentence_bleu, [samples, targets, log_probs],
+                                  tf.float32)
       self._get_mrt_loss(losses, log_probs, sentence_bleus)
     return losses
   
-  def _add_reference(self, samples, targets):
-    # !! May not be needed
-    target_size = common_layers.shape_list(targets)
-    pad_len = common_layers.shape_list(samples)[1] - target_size[1]
-    padding = tf.zeros((target_size[0], pad_len), dtype=tf.int32)
-    padded_target = tf.concat([targets, padding], axis=1)
-    samples = tf.concat([samples, padded_target], axis=0)
-    return samples
 
   def _get_mrt_loss(self, losses, log_probs, bleus):
     """
     losses: dictionary containing the loss numerator and denominator for training-mode logits
-    log_probs: [batch_size * sample_num] tensor containing negative log probs of samples
-    bleus: [batch_size * sample_num] list of scalars. Duplicate samples (which are 
+    log_probs: [batch_size, sample_num] tensor containing negative log probs of samples
+    bleus: [batch_size, sample_num] list of scalars. Duplicate samples (which are 
            ignored by MRT) have a bleu of -1
     """
     if self.hparams.mrt_use_ref_score and not self.hparams.mrt_use_negative_loss:
       tf.logging.warning('If using loss bleu (1-BLEU) for MRT, reference scores with BLEU=1 will be ignored')
 
     if self.hparams.mrt_use_ref_score and self.hparams.mrt_use_negative_loss:
-      ref_loss = -losses['training'][0] # NB ref bleu is always 1
+      ref_prob = losses['training'][0] # NB ref bleu is always 1
+      ref_prob_bleu = -ref_prob
     else:
-      ref_loss = 0.0
+      ref_prob = ref_prob_bleu = 0.0
     log_probs *= self.hparams.mrt_alpha
     probs = tf.exp(log_probs)
+    bleus.set_shape([None, self.hparams.mrt_sample_num])
     duplicate_mask = tf.cast(tf.greater_equal(bleus, tf.zeros_like(bleus)), tf.float32)
     probs *= duplicate_mask
     if self.hparams.mrt_use_negative_loss:
       loss_bleus = -bleus
     else:
       loss_bleus = tf.ones_like(bleus) - bleus
-    prob_num = tf.reduce_sum(probs * loss_bleus) + ref_loss
-    prob_den = tf.reduce_sum(probs) + ref_loss
-    losses['training'] = (prob_num, prob_den)
+    sample_prob_num = tf.reduce_sum(probs * loss_bleus, axis=1) + ref_prob_bleu
+    sample_prob_den = tf.reduce_sum(probs, axis=1) + ref_prob
+    losses['training'] = (tf.reduce_sum(sample_prob_num / sample_prob_den), 1.0)
 
   def _get_sentence_bleu(self, samples, targets, log_probs, max_order=4):
     sample_set = set()
     sentence_bleus = []
-    for idx, sample in enumerate(samples):
-      target = targets[idx]
-      sample_str = str(sample)
-      if sample_str not in sample_set:
-        sample_set.add(sample_str)
-        precisions = max_order * [0.0]
-        matches_by_order = max_order * [0]
-        ref_ngrams_by_order = max_order * [0]
-        hyp = decoding._save_until_eos(sample, is_image=False)
-        ref = decoding._save_until_eos(target, is_image=False)
-        self._get_ngram_matches(hyp, ref, matches_by_order, ref_ngrams_by_order, max_order)
-        smooth = 1.0
-        for i in xrange(max_order):
-          if ref_ngrams_by_order[i]:
-            if matches_by_order[i]:
-              precisions[i] = matches_by_order[i] / ref_ngrams_by_order[i]
-            elif self.hparams.mrt_bleu_smooth:
-              smooth *= 2
-              precisions[i] = 1.0 / (smooth * ref_ngrams_by_order[i])
-        bleu = math.exp(sum(math.log(p) for p in precisions if p) / max_order)
-        if self.hparams.mrt_use_bleu_bp:
-          ratio = len(hyp) / len(ref)
-          bp = math.exp(1 - 1. / ratio) if ratio < 1.0 else 1.0
-          bleu *= bp
-        sentence_bleus.append(bleu)
-      else:
-        # flag duplicate sentences to be masked in loss function
-        sentence_bleus.append(-1.0)
-    #tf.logging.info(sentence_bleus)
+    for idx, sample_batch in enumerate(samples):
+      ref = decoding._save_until_eos(targets[idx], is_image=False)
+      sentence_bleus.append([])
+      for sample in sample_batch:
+        sample_str = str(sample)
+        if sample_str not in sample_set:
+          sample_set.add(sample_str)
+          precisions = max_order * [0.0]
+          matches_by_order = max_order * [0]
+          ref_ngrams_by_order = max_order * [0]
+          hyp = decoding._save_until_eos(sample, is_image=False)
+          self._get_ngram_matches(hyp, ref, matches_by_order, ref_ngrams_by_order, max_order)
+          smooth = 1.0
+          for i in xrange(max_order):
+            if ref_ngrams_by_order[i]:
+              if matches_by_order[i]:
+                precisions[i] = matches_by_order[i] / ref_ngrams_by_order[i]
+              elif self.hparams.mrt_bleu_smooth:
+                smooth *= 2
+                precisions[i] = 1.0 / (smooth * ref_ngrams_by_order[i])
+          bleu = math.exp(sum(math.log(p) for p in precisions if p) / max_order)
+          if self.hparams.mrt_use_bleu_bp:
+            ratio = len(hyp) / len(ref)
+            bp = math.exp(1 - 1. / ratio) if ratio < 1.0 else 1.0
+            bleu *= bp
+          sentence_bleus[idx].append(bleu)
+        else:
+          # flag duplicate sentences to be masked in loss function
+          sentence_bleus[idx].append(-1.0)
     return np.asarray(sentence_bleus, dtype=np.float32)
     
   def _get_ngram_matches(self, hyp, ref, matches_by_order, ref_ngrams_by_order, max_order):
@@ -465,12 +457,6 @@ class T2TModel(base.Layer):
         matches_by_order[len(ngram) - 1] += min(count, hyp_ngrams[ngram])
     
         
-  def _minimum_risk_sample(self, features=None, decode_length=20):
-    """
-    Return sampled logits corresponding to features
-    """
-    outputs = self._greedy_infer(features, decode_length)
-    return outputs['logits']
 
   def eval_autoregressive(self, features=None, decode_length=50):
     """Autoregressive eval.
