@@ -264,14 +264,29 @@ class Transformer(t2t_model.T2TModel):
         logits = target_modality.top(body_outputs, None)
       return tf.squeeze(logits, axis=[1, 2, 3]), cache
 
-    return fast_sample(
-        encoder_output=encoder_output,
-        encoder_decoder_attention_bias=encoder_decoder_attention_bias,
-        symbols_to_logits_fn=symbols_to_logits_fn,
-        hparams=hparams,
-        decode_length=decode_length,
-        vocab_size=target_modality.top_dimensionality,
-        sample_num=self.hparams.mrt_sample_num)
+    batch_size = common_layers.shape_list(encoder_output)[0]
+    key_channels = hparams.attention_key_channels or hparams.hidden_size
+    value_channels = hparams.attention_value_channels or hparams.hidden_size
+    num_layers = hparams.num_decoder_layers or hparams.num_hidden_layers
+
+    cache = {
+      "layer_%d" % layer: {
+        "k": tf.zeros([batch_size, 0, key_channels]),
+        "v": tf.zeros([batch_size, 0, value_channels]),
+      }
+      for layer in range(num_layers)
+    }
+
+    cache["encoder_output"] = encoder_output
+    cache["encoder_decoder_attention_bias"] = encoder_decoder_attention_bias
+
+    return fast_sample(cache=cache,
+                       batch_size=batch_size,
+                       symbols_to_logits_fn=symbols_to_logits_fn,
+                       hparams=hparams,
+                       decode_length=decode_length,
+                       vocab_size=target_modality.top_dimensionality,
+                       sample_num=self.hparams.mrt_sample_num)
 
   def _fast_decode(self,
                    features,
@@ -506,29 +521,15 @@ def fast_decode(encoder_output,
   return {"outputs": logits, "scores": scores}
 
 
-def fast_sample(encoder_output,
-                encoder_decoder_attention_bias,
+def fast_sample(cache,
+                batch_size,
                 symbols_to_logits_fn,
                 hparams,
                 decode_length,
                 vocab_size,
                 sample_num,
                 eos_id=beam_search.EOS_ID):
-  batch_size = common_layers.shape_list(encoder_output)[0]
-  key_channels = hparams.attention_key_channels or hparams.hidden_size
-  value_channels = hparams.attention_value_channels or hparams.hidden_size
-  num_layers = hparams.num_decoder_layers or hparams.num_hidden_layers
 
-  cache = {
-      "layer_%d" % layer: {
-          "k": tf.zeros([batch_size, 0, key_channels]),
-          "v": tf.zeros([batch_size, 0, value_channels]),
-      }
-      for layer in range(num_layers)
-  }
-
-  cache["encoder_output"] = encoder_output
-  cache["encoder_decoder_attention_bias"] = encoder_decoder_attention_bias
   def inner_loop(i, finished, next_id, decoded_ids, log_probs, cache):
     flat_ids = tf.reshape(next_id, [batch_size * sample_num, -1])
     flat_cache = nest.map_structure(beam_search._merge_beam_dim, cache)
