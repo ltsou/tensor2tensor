@@ -356,4 +356,4 @@ def basic_range1(ranged_hparams):
   rhp.set_float("optimizer_adam_beta2", 0.995, 0.999)
   rhp.set_categorical(
       "optimizer",
-      ["Adam", "Adagrad", "Momentum", "RMSProp", "SGD", "YellowFin"])
+      ["Adam", "LargebatchAdam", "Adagrad", "Momentum", "RMSProp", "SGD", "YellowFin"])

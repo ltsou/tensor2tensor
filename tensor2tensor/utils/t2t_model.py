@@ -959,15 +959,6 @@ class T2TModel(base.Layer):
     return output, losses
 
 
-def _get_training_loss(target_modality, logits, features, dp):
-  if "loss_mask" in features:
-    tf.logging.info("Applying loss mask")
-    targets = [t*m for t, m in zip(features["targets"], features["loss_mask"])]
-  else:
-    targets = features["targets"]
-  return target_modality.loss_sharded(logits, targets, dp)
-
-
 def _warn_changed_modality_type(new_name, old_name, feature_name):
   new_type, new_name = registry.parse_modality_name(new_name)
   old_type, old_name = registry.parse_modality_name(old_name)
