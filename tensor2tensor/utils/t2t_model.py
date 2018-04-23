@@ -202,7 +202,9 @@ class T2TModel(base.Layer):
       else:
         logits = self.top(output, features)
         losses["training"] = self.loss(logits, features)
-    if not self.mrt_called and self.hparams.mode == tf.estimator.ModeKeys.TRAIN:
+    if (not self.mrt_called and 
+        self.hparams.mode == tf.estimator.ModeKeys.TRAIN and 
+        self.hparams.minimum_risk_train):
       self.mrt_called = True
       losses = self.minimum_risk_training(transformed_features, original_targets, losses)
     return logits, losses
@@ -376,13 +378,12 @@ class T2TModel(base.Layer):
     assert self.hparams.sampling_method == "random"
     self.set_mode(tf.estimator.ModeKeys.PREDICT)
     decode_length = self.hparams.mrt_decode_length
-    with tf.variable_scope("samples", reuse=tf.AUTO_REUSE):
-      samples, log_probs = self._minimum_risk_sample(features, decode_length=decode_length)
-      samples = tf.cast(samples, tf.int32)
-      targets = tf.squeeze(targets)
-      sentence_bleus = tf.py_func(self._get_sentence_bleu, [samples, targets, log_probs],
-                                  tf.float32)
-      self._get_mrt_loss(losses, log_probs, sentence_bleus)
+    #with tf.variable_scope("samples", reuse=tf.AUTO_REUSE):
+    samples, log_probs = self._minimum_risk_sample(features, decode_length=decode_length)
+    samples = tf.cast(samples, tf.int32)
+    targets = tf.squeeze(targets)
+    sentence_bleus = tf.py_func(self._get_sentence_bleu, [samples, targets], tf.float32)
+    self._get_mrt_loss(losses, log_probs, sentence_bleus)
     return losses
   
 
@@ -414,7 +415,7 @@ class T2TModel(base.Layer):
     sample_prob_den = tf.reduce_sum(probs, axis=1) + ref_prob
     losses['training'] = (tf.reduce_sum(sample_prob_num / sample_prob_den), 1.0)
 
-  def _get_sentence_bleu(self, samples, targets, log_probs, max_order=4):
+  def _get_sentence_bleu(self, samples, targets, max_order=4):
     sample_set = set()
     sentence_bleus = []
     for idx, sample_batch in enumerate(samples):

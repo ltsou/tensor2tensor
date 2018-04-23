@@ -530,6 +530,9 @@ def fast_sample(cache,
                 sample_num,
                 eos_id=beam_search.EOS_ID):
 
+  batch_pos = beam_search.compute_batch_indices(batch_size, sample_num)
+  sample_pos = tf.tile([tf.range(sample_num)], [batch_size, 1])
+
   def inner_loop(i, finished, next_id, decoded_ids, log_probs, cache):
     flat_ids = tf.reshape(next_id, [batch_size * sample_num, -1])
     flat_cache = nest.map_structure(beam_search._merge_beam_dim, cache)
@@ -539,16 +542,13 @@ def fast_sample(cache,
     flat_next_id = common_layers.sample_with_temperature(flat_logits, hparams.sampling_temp)
     logits = tf.reshape(flat_logits, [batch_size, sample_num, -1])
     next_id = tf.reshape(flat_next_id, [batch_size, sample_num])
-
-    all_log_probs = beam_search.log_prob_from_logits(logits)
-    batch_pos = beam_search.compute_batch_indices(batch_size, sample_num)
-    sample_pos = tf.tile([tf.range(sample_num)], [batch_size, 1])
+    log_prob_norm = tf.reduce_logsumexp(logits, axis=2)
+  
     scores_to_gather = tf.stack([batch_pos, sample_pos, tf.to_int32(next_id)], axis=2)
-    sample_log_probs = tf.gather_nd(all_log_probs, scores_to_gather)
-
+    sample_logits = tf.gather_nd(logits, scores_to_gather)
     finished |= tf.equal(next_id, eos_id)
     decoded_ids = tf.concat([decoded_ids, tf.expand_dims(next_id, 2)], 2)
-    log_probs += sample_log_probs
+    log_probs += (sample_logits - log_prob_norm)
     return i + 1, finished, next_id, decoded_ids, log_probs, cache
 
   def is_not_finished(i, finished, *_):

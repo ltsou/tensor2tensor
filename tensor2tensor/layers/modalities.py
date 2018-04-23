@@ -171,13 +171,14 @@ class MRTSymbolModality(SymbolModality):
     batch_size = target_shape[0]
     timesteps = target_shape[1]
     reshaped_logits = tf.reshape(logits, [batch_size, timesteps, -1])
-    log_probs = beam_search.log_prob_from_logits(reshaped_logits)
+    log_prob_norm = tf.reduce_logsumexp(reshaped_logits, axis=2)
+    
     ids = tf.reshape(targets, [batch_size, -1, 1])
     batch_ids = tf.expand_dims(beam_search.compute_batch_indices(batch_size, timesteps), -1)
     pos_ids = tf.reshape(tf.tile(tf.expand_dims(tf.range(timesteps), -1), [batch_size, 1]), 
                          [batch_size, -1, 1])
     gather_ids = tf.concat([batch_ids, pos_ids, ids], axis=2)
-    sentence_tok_log_probs = tf.gather_nd(log_probs, gather_ids) # shape: [batch_size, timesteps]
+    sentence_tok_log_probs = tf.gather_nd(reshaped_logits, gather_ids) - log_prob_norm # shape: [batch_size, timesteps]
     weights = self.targets_weights_fn(tf.squeeze(targets))
     sentence_neg_log_probs = tf.reduce_sum(weights * sentence_tok_log_probs, axis=1)
     sentence_neg_log_probs *= self._model_hparams.mrt_alpha
