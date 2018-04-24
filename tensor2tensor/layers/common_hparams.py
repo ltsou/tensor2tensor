@@ -214,7 +214,7 @@ def basic_params1():
       # Set this for pure model parallelism.  There is only one data shard.
       no_data_parallelism=False,
       minimum_risk_train=False,
-      mrt_decode_length=10,
+      mrt_decode_length=5,
       mrt_sample_num=20,
       mrt_alpha=0.005,
       mrt_use_bleu_bp=True,

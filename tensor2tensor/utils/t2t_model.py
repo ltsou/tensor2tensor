@@ -373,12 +373,9 @@ class T2TModel(base.Layer):
     args:
     features: transformed_features passed through bottom of model
     losses: losses output from main model body
-    decode_length: additional steps for decoding
     """
     assert self.hparams.sampling_method == "random"
-    self.set_mode(tf.estimator.ModeKeys.PREDICT)
     decode_length = self.hparams.mrt_decode_length
-    #with tf.variable_scope("samples", reuse=tf.AUTO_REUSE):
     samples, log_probs = self._minimum_risk_sample(features, decode_length=decode_length)
     samples = tf.cast(samples, tf.int32)
     targets = tf.squeeze(targets)

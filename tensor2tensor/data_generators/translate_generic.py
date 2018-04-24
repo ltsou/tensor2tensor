@@ -210,3 +210,14 @@ class TranslateGenericExistingSharedVocab(translate.TranslateProblem):
     data_path = _compile_data(tmp_dir, datasets, "generic_tok_%s" % tag)
     return translate.token_generator(data_path + ".src", data_path + ".trg",
                                      token_vocab, EOS)
+
+@registry.register_problem
+class TranslateGenericExistingVocabMrt(TranslateGenericExistingVocab):
+  """Problem spec for generic translation, using existing vocab """
+
+  @property
+  def batch_size_means_tokens(self):
+    """MRT is very memory-intensive, so it's potentially useful to specify 
+    e.g. 1 example per batch
+    """
+    return True
