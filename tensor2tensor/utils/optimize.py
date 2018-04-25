@@ -152,12 +152,26 @@ def piecewise_learning_rate(step, boundaries, values):
   return tf.train.piecewise_constant(
       step, boundaries, values, name="piecewise_lr")
 
+def get_global_step(hparams):
+  global_step = tf.to_float(tf.train.get_or_create_global_step())
+  if hparams is not None:
+    try:
+      if hparams.fake_gpu_multiplier > 1:
+        tf.logging.info("Scaling down learning rate decay by "
+                        "fake_gpu_multiplier=%d" % hparams.fake_gpu_multiplier)
+        fake_gpu_multiplier = tf.constant(hparams.fake_gpu_multiplier,
+                                          dtype=tf.float32)
+        global_step = global_step / fake_gpu_multiplier
+    except AttributeError:
+      pass
+  return global_step
+
 
 def learning_rate_decay(hparams, warmup_steps=0, num_worker_replicas=1, num_train_steps=1):
   """Inverse-decay learning rate until warmup_steps, then decay."""
   scheme = hparams.learning_rate_decay_scheme
   warmup_steps = tf.to_float(warmup_steps * num_worker_replicas)
-  global_step = tf.to_float(tf.train.get_or_create_global_step())
+  global_step = get_global_step(hparams)
   try:
     if hparams.fake_gpu_multiplier > 1:
       tf.logging.info("Scaling down learning rate decay by "
@@ -211,7 +225,7 @@ def learning_rate_decay(hparams, warmup_steps=0, num_worker_replicas=1, num_trai
                    hparams.learning_rate_decay_scheme)
 
 
-def learning_rate_warmup(warmup_steps, warmup_schedule="exp"):
+def learning_rate_warmup(warmup_steps, warmup_schedule="exp", hparams=None):
   """Learning rate warmup multiplier."""
   if not warmup_steps:
     return tf.constant(1.)
@@ -220,7 +234,7 @@ def learning_rate_warmup(warmup_steps, warmup_schedule="exp"):
                   warmup_schedule, warmup_steps)
 
   warmup_steps = tf.to_float(warmup_steps)
-  global_step = tf.to_float(tf.train.get_or_create_global_step())
+  global_step = get_global_step(hparams)
 
   if warmup_schedule == "exp":
     return tf.exp(tf.log(0.01) / warmup_steps)**(warmup_steps - global_step)
@@ -233,11 +247,10 @@ def learning_rate_warmup(warmup_steps, warmup_schedule="exp"):
 def learning_rate_decay_with_warmup(hparams, num_worker_replicas=1):
   """Learning rate decay rate with warmup based on hparams."""
   warmup_steps = hparams.learning_rate_warmup_steps * num_worker_replicas
-  warmup = learning_rate_warmup(warmup_steps)
-
+  warmup = learning_rate_warmup(warmup_steps, hparams=hparams)
+  
   decay = learning_rate_decay(hparams, warmup_steps)
-
-  global_step = tf.train.get_or_create_global_step()
+  global_step = get_global_step(hparams)
   return tf.where(global_step < warmup_steps, warmup, decay)
 
 

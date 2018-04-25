@@ -58,6 +58,7 @@ class LargebatchAdamOptimizer(tf.contrib.opt.LazyAdamOptimizer):
 
   def _prepare(self):
     super(LargebatchAdamOptimizer, self)._prepare()
+    tf.logging.info('Preparing Adam optimizer with {} accumulation batches'.format(self._n))
     self._n_t = ops.convert_to_tensor(self._n, name="n")
 
   def _apply_cond(self, apply_fn, grad, var, *args,**kwargs):
@@ -77,7 +78,7 @@ class LargebatchAdamOptimizer(tf.contrib.opt.LazyAdamOptimizer):
       gradient in the `grad_acc` slot otherwise.
     """
     grad_acc = self.get_slot(var, "grad_acc")
-
+    tf.logging.info('maybe applying ops: {}'.format(apply_fn))
     def apply_adam(grad_acc, apply_fn, grad, var, *args, **kwargs):
       total_grad = (grad_acc + grad) / math_ops.cast(self._n_t, 
                                                      grad.dtype.base_dtype)
