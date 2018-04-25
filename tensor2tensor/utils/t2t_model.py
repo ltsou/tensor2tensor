@@ -286,11 +286,18 @@ class T2TModel(base.Layer):
       tf.logging.warn(_no_problem_err("loss"))
       return (tf.constant(0., dtype=tf.float32),
               tf.constant(1., dtype=tf.float32))
-
+      
     target_modality = self._problem_hparams.target_modality
     loss_num, loss_den = target_modality.loss(logits, features["targets"])
     loss_num *= self._problem_hparams.loss_multiplier
+    if self.hparams.do_ewc:
+      loss_num = self.get_ewc_loss(loss_num, loss_den)
     return loss_num, loss_den
+
+  def get_ewc_loss(self, loss_num, loss_den):
+    # get fisher loss using stored variables from previous task
+    # add scaled fisher loss to loss_num
+    return loss_num
 
   def optimize(self, loss, num_async_replicas=1):
     """Return a training op minimizing loss."""

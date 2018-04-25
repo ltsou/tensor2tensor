@@ -213,6 +213,12 @@ def basic_params1():
       force_full_predict=False,
       # Set this for pure model parallelism.  There is only one data shard.
       no_data_parallelism=False,
+      do_ewc=False,
+      # number of minibatches to use when recomputing Fisher diagonal for EWC
+      ewc_fisher_num_samples=100,
+      ewc_loss_weight=0.5,
+      # location to save task vars during elastic weight consolidation
+      ewc_save_vars=None,
   )
 
 
