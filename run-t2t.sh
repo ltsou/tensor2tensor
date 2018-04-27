@@ -75,8 +75,12 @@ function logMessage {
 
 # get number of gpu
 if [ -z ${CUDA_VISIBLE_DEVICES+x} ]; then
-    ngpu=`nvidia-smi --query-gpu=gpu_name --format=csv,noheader | wc -l`
-    logMessage "Using all available GPUs: $ngpu"
+    ngpu=`nvidia-smi --query-gpu=gpu_name --format=csv,noheader 2> /dev/null | wc -l`
+    if [ $ngpu -gt 0 ]; then
+        logMessage "Using all available GPUs: $ngpu"
+    else
+        logMessage "No GPU found. Using the CPU"
+    fi
 else
     ngpu=`echo $CUDA_VISIBLE_DEVICES | tr , '\n' | wc -l`
     logMessage "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
