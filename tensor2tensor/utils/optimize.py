@@ -172,15 +172,6 @@ def learning_rate_decay(hparams, warmup_steps=0, num_worker_replicas=1, num_trai
   scheme = hparams.learning_rate_decay_scheme
   warmup_steps = tf.to_float(warmup_steps * num_worker_replicas)
   global_step = get_global_step(hparams)
-  try:
-    if hparams.fake_gpu_multiplier > 1:
-      tf.logging.info("Scaling down learning rate decay by "
-                      "fake_gpu_multiplier=%d" % hparams.fake_gpu_multiplier)
-      fake_gpu_multiplier = tf.constant(hparams.fake_gpu_multiplier,
-                                        dtype=tf.float32)
-      global_step = global_step / fake_gpu_multiplier
-  except AttributeError:
-    pass
 
   if not scheme or scheme == "none":
     return tf.constant(1.)
