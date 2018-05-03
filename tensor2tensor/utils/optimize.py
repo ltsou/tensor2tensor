@@ -157,7 +157,7 @@ def get_global_step(hparams):
   if hparams is not None:
     try:
       if hparams.fake_gpu_multiplier > 1:
-        tf.logging.info("Scaling down learning rate decay by "
+        tf.logging.info("Scaling down global step for optimizer by "
                         "fake_gpu_multiplier=%d" % hparams.fake_gpu_multiplier)
         fake_gpu_multiplier = tf.constant(hparams.fake_gpu_multiplier,
                                           dtype=tf.float32)
