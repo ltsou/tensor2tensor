@@ -165,7 +165,10 @@ class SymbolModality(modality.Modality):
 @registry.register_symbol_modality("mrt")
 class MRTSymbolModality(SymbolModality):
   """SymbolModality that uses Minimum Risk Training"""
-  
+  def __init__(self, *args, **kwargs):
+    super(MRTSymbolModality, self).__init__(*args, **kwargs)
+    self.bleus = None
+
   def loss(self, logits, targets):
     target_shape = common_layers.shape_list(targets)
     batch_size = target_shape[0]
@@ -181,10 +184,15 @@ class MRTSymbolModality(SymbolModality):
     sentence_tok_log_probs = tf.gather_nd(reshaped_logits, gather_ids) - log_prob_norm # shape: [batch_size, timesteps]
     weights = self.targets_weights_fn(tf.squeeze(targets))
     sentence_neg_log_probs = tf.reduce_sum(weights * sentence_tok_log_probs, axis=1)
-    sentence_neg_log_probs *= self._model_hparams.mrt_alpha
-    sentence_probs = tf.exp(sentence_neg_log_probs)
-    return sentence_probs, tf.reduce_sum(weights)
+    if self.bleus is not None:
+      sentence_neg_log_probs *= self.bleus
+    #sentence_neg_log_probs *= self._model_hparams.mrt_alpha
+    return sentence_neg_log_probs, tf.reduce_sum(weights)
     
+  def set_bleus(self, bleus):
+    # needed by loss function
+    self.bleus = tf.reshape(bleus, [-1])
+
 
   def top(self, body_output, _):
     """Generate logits.

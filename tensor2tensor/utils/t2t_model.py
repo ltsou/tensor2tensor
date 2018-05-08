@@ -189,7 +189,7 @@ class T2TModel(base.Layer):
     return sharded_logits, losses
 
   def model_fn(self, features):
-    original_targets = features['targets']
+    original_features = features
     transformed_features = self.bottom(features)
     with tf.variable_scope("body"):
       tf.logging.info("Building model body")
@@ -202,11 +202,11 @@ class T2TModel(base.Layer):
       else:
         logits = self.top(output, features)
         losses["training"] = self.loss(logits, features)
-    if (not self.mrt_called and 
-        self.hparams.mode == tf.estimator.ModeKeys.TRAIN and 
+    if (not self.mrt_called and
+        self.hparams.mode == tf.estimator.ModeKeys.TRAIN and
         self.hparams.minimum_risk_train):
       self.mrt_called = True
-      losses = self.minimum_risk_training(transformed_features, original_targets, losses)
+      logits, losses = self.minimum_risk_training(transformed_features, original_features)
     return logits, losses
 
   def bottom(self, features):
@@ -368,83 +368,68 @@ class T2TModel(base.Layer):
     """Called before inference to allow adding infer-specific features."""
     pass
 
-  def minimum_risk_training(self, features, targets, losses):
+  def minimum_risk_training(self, transformed_features, original_features):
     """
     args:
-    features: transformed_features passed through bottom of model
-    losses: losses output from main model body
+    transformed_features: transformed_features passed through bottom of model
+    original_features: untransformed features
     """
     assert self.hparams.sampling_method == "random"
     decode_length = self.hparams.mrt_decode_length
-    samples, log_probs = self._minimum_risk_sample(features, decode_length=decode_length)
-    samples = tf.cast(samples, tf.int32)
-    targets = tf.squeeze(targets)
-    sentence_bleus = tf.py_func(self._get_sentence_bleu, [samples, targets], tf.float32)
-    self._get_mrt_loss(losses, log_probs, sentence_bleus)
-    return losses
+    samples = self._minimum_risk_sample(transformed_features, decode_length=decode_length)
+    samples = tf.cast(samples, tf.int32) # sample shape: [batch_size, sample_num, timesteps]
+    original_targets = tf.squeeze(original_features['targets'], [2, 3])
+    if self.hparams.mrt_use_ref_score:
+      samples = tf.concat([samples, tf.expand_dims(original_targets, axis=1)], axis=1)
+    bleus = tf.py_func(self._get_sentence_bleu, [samples, original_targets], tf.float32)
+    logits, losses =  self._forward_pass_samples(original_features, samples, bleus)
+    return logits, losses
   
-
-  def _get_mrt_loss(self, losses, log_probs, bleus):
+  def _forward_pass_samples(self, features, samples, sentence_bleus):
     """
-    losses: dictionary containing the loss numerator and denominator for training-mode logits
-    log_probs: [batch_size, sample_num] tensor containing negative log probs of samples
-    bleus: [batch_size, sample_num] list of scalars. Duplicate samples (which are 
-           ignored by MRT) have a bleu of -1
+    Repeat forward pass, now using samples as the 'reference' targets
+    NB: this assumes that the encoded inputs have been cached and tiled by the model
     """
-    if self.hparams.mrt_use_ref_score and not self.hparams.mrt_use_negative_loss:
-      tf.logging.warning('If using loss bleu (1-BLEU) for MRT, reference scores with BLEU=1 will be ignored')
+    self._problem_hparams.target_modality.set_bleus(sentence_bleus)
+    flat_samples = beam_search._merge_beam_dim(samples)
+    flat_samples = tf.expand_dims(tf.expand_dims(flat_samples, -1), -1)
+    features['targets'] = flat_samples
+    logits, losses = self(features) # shape [batch_size * sample_num]
+    return logits, losses
 
-    if self.hparams.mrt_use_ref_score and self.hparams.mrt_use_negative_loss:
-      ref_prob = losses['training'][0] # NB ref bleu is always 1
-      ref_prob_bleu = -ref_prob
-    else:
-      ref_prob = ref_prob_bleu = 0.0
-    log_probs *= self.hparams.mrt_alpha
-    probs = tf.exp(log_probs)
-    bleus.set_shape([None, self.hparams.mrt_sample_num])
-    duplicate_mask = tf.cast(tf.greater_equal(bleus, tf.zeros_like(bleus)), tf.float32)
-    probs *= duplicate_mask
-    if self.hparams.mrt_use_negative_loss:
-      loss_bleus = -bleus
-    else:
-      loss_bleus = tf.ones_like(bleus) - bleus
-    sample_prob_num = tf.reduce_sum(probs * loss_bleus, axis=1) + ref_prob_bleu
-    sample_prob_den = tf.reduce_sum(probs, axis=1) + ref_prob
-    losses['training'] = (tf.reduce_sum(sample_prob_num / sample_prob_den), 1.0)
-
+  
   def _get_sentence_bleu(self, samples, targets, max_order=4):
-    sample_set = set()
     sentence_bleus = []
     for idx, sample_batch in enumerate(samples):
       ref = decoding._save_until_eos(targets[idx], is_image=False)
-      sentence_bleus.append([])
+      batch_bleus = []
       for sample in sample_batch:
-        sample_str = str(sample)
-        if sample_str not in sample_set:
-          sample_set.add(sample_str)
-          precisions = max_order * [0.0]
-          matches_by_order = max_order * [0]
-          ref_ngrams_by_order = max_order * [0]
-          hyp = decoding._save_until_eos(sample, is_image=False)
-          self._get_ngram_matches(hyp, ref, matches_by_order, ref_ngrams_by_order, max_order)
-          smooth = 1.0
-          for i in xrange(max_order):
-            if ref_ngrams_by_order[i]:
-              if matches_by_order[i]:
-                precisions[i] = matches_by_order[i] / ref_ngrams_by_order[i]
-              elif self.hparams.mrt_bleu_smooth:
-                smooth *= 2
-                precisions[i] = 1.0 / (smooth * ref_ngrams_by_order[i])
-          bleu = math.exp(sum(math.log(p) for p in precisions if p) / max_order)
-          if self.hparams.mrt_use_bleu_bp:
-            ratio = len(hyp) / len(ref)
-            bp = math.exp(1 - 1. / ratio) if ratio < 1.0 else 1.0
-            bleu *= bp
-          sentence_bleus[idx].append(bleu)
+        precisions = max_order * [0.0]
+        matches_by_order = max_order * [0]
+        ref_ngrams_by_order = max_order * [0]
+        hyp = decoding._save_until_eos(sample, is_image=False)
+        self._get_ngram_matches(hyp, ref, matches_by_order, ref_ngrams_by_order, max_order)
+        smooth = 1.0
+        for i in xrange(max_order):
+          if ref_ngrams_by_order[i]:
+            if matches_by_order[i]:
+              precisions[i] = matches_by_order[i] / ref_ngrams_by_order[i]
+            elif self.hparams.mrt_bleu_smooth:
+              smooth *= 2
+              precisions[i] = 1.0 / (smooth * ref_ngrams_by_order[i])
+        bleu = math.exp(sum(math.log(p) for p in precisions if p) / max_order)
+        if self.hparams.mrt_use_bleu_bp:
+          ratio = len(hyp) / len(ref)
+          bp = math.exp(1 - 1. / ratio) if ratio < 1.0 else 1.0
+          bleu *= bp
+        if self.hparams.mrt_use_negative_loss:
+          bleu = -bleu
         else:
-          # flag duplicate sentences to be masked in loss function
-          sentence_bleus[idx].append(-1.0)
+          bleu = 1 - bleu
+        batch_bleus.append(bleu)
+      sentence_bleus.append(batch_bleus - np.mean(batch_bleus))
     return np.asarray(sentence_bleus, dtype=np.float32)
+
     
   def _get_ngram_matches(self, hyp, ref, matches_by_order, ref_ngrams_by_order, max_order):
     hyp_ngrams = bleu_hook._get_ngrams(hyp, max_order)
