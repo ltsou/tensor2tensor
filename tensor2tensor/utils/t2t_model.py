@@ -368,29 +368,35 @@ class T2TModel(base.Layer):
     """Called before inference to allow adding infer-specific features."""
     pass
 
-  def minimum_risk_training(self, transformed_features, original_features):
+  def minimum_risk_training(self, transformed_features, orig_features):
     """
     args:
     transformed_features: transformed_features passed through bottom of model
-    original_features: untransformed features
+    orig_features: untransformed features
     """
     assert self.hparams.sampling_method == "random"
     decode_length = self.hparams.mrt_decode_length
     samples = self._minimum_risk_sample(transformed_features, decode_length=decode_length)
-    samples = tf.cast(samples, tf.int32) # sample shape: [batch_size, sample_num, timesteps]
-    original_targets = tf.squeeze(original_features['targets'], [2, 3])
-    if self.hparams.mrt_use_ref_score:
-      samples = tf.concat([samples, tf.expand_dims(original_targets, axis=1)], axis=1)
-    bleus = tf.py_func(self._get_sentence_bleu, [samples, original_targets], tf.float32)
-    logits, losses =  self._forward_pass_samples(original_features, samples, bleus)
+    orig_targets = tf.squeeze(orig_features['targets'], [2, 3])
+    sample_count, samples = self._maybe_add_ref(samples, orig_targets)
+    bleus = tf.py_func(self._get_sentence_bleu, [samples, orig_targets], tf.float32)
+    logits, losses =  self._forward_pass_samples(orig_features, samples, bleus, sample_count)
     return logits, losses
   
-  def _forward_pass_samples(self, features, samples, sentence_bleus):
+  def _maybe_add_ref(self, samples, orig_targets):
+    samples = tf.cast(samples, tf.int32) # sample shape: [batch_size, sample_num, timesteps]
+    sample_count = self.hparams.mrt_sample_num
+    if self.hparams.mrt_use_ref_score:
+      samples = tf.concat([samples, tf.expand_dims(orig_targets, axis=1)], axis=1)
+      sample_count += 1
+    return sample_count, samples
+
+  def _forward_pass_samples(self, features, samples, bleus, sample_count):
     """
     Repeat forward pass, now using samples as the 'reference' targets
     NB: this assumes that the encoded inputs have been cached and tiled by the model
     """
-    self._problem_hparams.target_modality.set_bleus(sentence_bleus)
+    self._problem_hparams.target_modality.set_bleus_and_sample_denom(bleus, sample_count)
     flat_samples = beam_search._merge_beam_dim(samples)
     flat_samples = tf.expand_dims(tf.expand_dims(flat_samples, -1), -1)
     features['targets'] = flat_samples

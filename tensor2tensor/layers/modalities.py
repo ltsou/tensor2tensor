@@ -168,6 +168,7 @@ class MRTSymbolModality(SymbolModality):
   def __init__(self, *args, **kwargs):
     super(MRTSymbolModality, self).__init__(*args, **kwargs)
     self.bleus = None
+    self.sample_loss_norm = 1
 
   def loss(self, logits, targets):
     target_shape = common_layers.shape_list(targets)
@@ -183,17 +184,19 @@ class MRTSymbolModality(SymbolModality):
     gather_ids = tf.concat([batch_ids, pos_ids, ids], axis=2)
     sentence_tok_log_probs = tf.gather_nd(reshaped_logits, gather_ids) - log_prob_norm # shape: [batch_size, timesteps]
     weights = self.targets_weights_fn(tf.squeeze(targets))
+    loss_denom = tf.reduce_sum(weights)
     sentence_neg_log_probs = tf.reduce_sum(weights * sentence_tok_log_probs, axis=1)
     if self.bleus is not None:
       sentence_neg_log_probs *= self.bleus
-    #sentence_neg_log_probs *= self._model_hparams.mrt_alpha
-    return sentence_neg_log_probs, tf.reduce_sum(weights)
+      loss_denom *= self.sample_loss_norm
+    return sentence_neg_log_probs, loss_denom
     
-  def set_bleus(self, bleus):
+  def set_bleus_and_sample_denom(self, bleus, sample_num):
     # needed by loss function
     self.bleus = tf.reshape(bleus, [-1])
-
-
+    self.sample_loss_norm = sample_num - 1
+    
+    
   def top(self, body_output, _):
     """Generate logits.
 
