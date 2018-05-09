@@ -424,7 +424,7 @@ class T2TModel(base.Layer):
               smooth *= 2
               precisions[i] = 1.0 / (smooth * ref_ngrams_by_order[i])
         bleu = math.exp(sum(math.log(p) for p in precisions if p) / max_order)
-        if self.hparams.mrt_use_bleu_bp:
+        if self.hparams.mrt_use_bleu_bp and len(ref):
           ratio = len(hyp) / len(ref)
           bp = math.exp(1 - 1. / ratio) if ratio < 1.0 else 1.0
           bleu *= bp
