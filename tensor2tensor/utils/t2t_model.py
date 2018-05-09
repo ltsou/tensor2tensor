@@ -414,18 +414,18 @@ class T2TModel(base.Layer):
         matches_by_order = max_order * [0]
         ref_ngrams_by_order = max_order * [0]
         hyp = decoding._save_until_eos(sample, is_image=False)
-        self._get_ngram_matches(hyp, ref, matches_by_order, ref_ngrams_by_order, max_order)
+        _get_ngram_matches(hyp, ref, matches_by_order, ref_ngrams_by_order, max_order)
         smooth = 1.0
         for i in xrange(max_order):
           if ref_ngrams_by_order[i]:
             if matches_by_order[i]:
               precisions[i] = matches_by_order[i] / ref_ngrams_by_order[i]
-            elif self.hparams.mrt_bleu_smooth:
+            elif True#self.hparams.mrt_bleu_smooth:
               smooth *= 2
               precisions[i] = 1.0 / (smooth * ref_ngrams_by_order[i])
         bleu = math.exp(sum(math.log(p) for p in precisions if p) / max_order)
         if self.hparams.mrt_use_bleu_bp and len(ref):
-          ratio = len(hyp) / len(ref)
+          ratio = max(len(hyp), 1) / len(ref)
           bp = math.exp(1 - 1. / ratio) if ratio < 1.0 else 1.0
           bleu *= bp
         if self.hparams.mrt_use_negative_loss:
@@ -437,7 +437,7 @@ class T2TModel(base.Layer):
     return np.asarray(sentence_bleus, dtype=np.float32)
 
     
-  def _get_ngram_matches(self, hyp, ref, matches_by_order, ref_ngrams_by_order, max_order):
+  def _get_ngram_matches(hyp, ref, matches_by_order, ref_ngrams_by_order, max_order):
     hyp_ngrams = bleu_hook._get_ngrams(hyp, max_order)
     ref_ngrams = bleu_hook._get_ngrams(ref, max_order)
     for ngram, count in ref_ngrams.items():
