@@ -589,8 +589,10 @@ def fast_sample(cache,
             nest.map_structure(beam_search.get_state_shape_invariants, cache),
         ],
     back_prop=False)
+  pad_len = decode_length - common_layers.shape_list(decoded_ids)[2]
+  padded_decoded_ids = tf.pad(decoded_ids, [[0, 0], [0, 0], [0, pad_len]])
 
-  return decoded_ids
+  return padded_decoded_ids
 
 
 @registry.register_model
