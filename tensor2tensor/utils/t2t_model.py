@@ -290,13 +290,24 @@ class T2TModel(base.Layer):
     target_modality = self._problem_hparams.target_modality
     loss_num, loss_den = target_modality.loss(logits, features["targets"])
     loss_num *= self._problem_hparams.loss_multiplier
-    if self.hparams.do_ewc:
+    if self.hparams.ewc_load_vars or self.hparams.ewc_save_vars:
       loss_num = self.get_ewc_loss(loss_num, loss_den)
     return loss_num, loss_den
 
   def get_ewc_loss(self, loss_num, loss_den):
     # get fisher loss using stored variables from previous task
     # add scaled fisher loss to loss_num
+    tf.logging.info('Creating lagged variables for EWC loss')
+    for var in tf.trainable_variables():
+      lagged_name = "{}_lag".format(var.name)
+      lagged_var = tf.Variable(tf.zeros_like(var), name=lagged_name, trainable=False)
+      tf.add_to_collection(self.hparams.ewc_collection_name)
+    if self.hparams.ewc_load_vars:
+      tf.logging.info('Adding EWC penalty to loss')
+      penalty = tf.reduce_sum(tf.square(w1 - w2) 
+                              for w1, w2 in zip(
+                tf.trainable_variables(), tf.get_collection(self.hparams.ewc_collection_name)))
+      #loss_num += self.hparams.ewc_loss_weight * penalty
     return loss_num
 
   def optimize(self, loss, num_async_replicas=1):

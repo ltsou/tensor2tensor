@@ -224,8 +224,12 @@ def fashion_mnist_generator(tmp_dir, training, how_many, start_from=0):
 
 
 @registry.register_problem
-class ImageFashionMnist(image_utils.Image2ClassProblem):
+class ImageFashionMnist(ImageMnistTune):
   """Fashion MNIST."""
+
+  @property
+  def num_channels(self):
+    return 1
 
   @property
   def is_small(self):

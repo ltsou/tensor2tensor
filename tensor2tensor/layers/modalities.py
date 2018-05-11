@@ -199,8 +199,8 @@ class ImageModality(modality.Modality):
   def bottom(self, inputs):
     with tf.variable_scope(self.name):
       inputs = tf.to_float(inputs)
-      if not context.in_eager_mode():
-        tf.summary.image("inputs", inputs, max_outputs=2)
+      #if not context.in_eager_mode():
+      #  tf.summary.image("inputs", inputs, max_outputs=2)
       return inputs
 
   def targets_bottom(self, inputs):
@@ -231,7 +231,7 @@ class ImageModality(modality.Modality):
       res = tf.layers.dense(out, self.top_dimensionality)
       if not tf.get_variable_scope().reuse:
         res_argmax = tf.cast(tf.argmax(res, axis=-1), tf.uint8)
-        tf.summary.image("result", res_argmax, max_outputs=1)
+        #tf.summary.image("result", res_argmax, max_outputs=1)
       return res
 
 
@@ -254,7 +254,7 @@ class ImageChannelCompressModality(modality.Modality):
     """
     with tf.variable_scope(name):
       inputs = tf.to_float(inputs)
-      tf.summary.image("inputs", inputs, max_outputs=2)
+      #tf.summary.image("inputs", inputs, max_outputs=2)
       inputs = common_layers.convert_rgb_to_real(inputs)
       ishape = common_layers.shape_list(inputs)
       inputs = tf.reshape(inputs, [-1, ishape[1], ishape[2] * ishape[3], 1])
