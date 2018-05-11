@@ -169,6 +169,7 @@ class MRTSymbolModality(SymbolModality):
     super(MRTSymbolModality, self).__init__(*args, **kwargs)
     self.bleus = None
     self.sample_loss_norm = 1
+    self.alpha = 0.005
 
   def loss(self, logits, targets):
     target_shape = common_layers.shape_list(targets)
@@ -189,12 +190,14 @@ class MRTSymbolModality(SymbolModality):
     if self.bleus is not None:
       sentence_neg_log_probs *= self.bleus
       loss_denom *= self.sample_loss_norm
+    sentence_neg_log_probs *= self.alpha
     return sentence_neg_log_probs, loss_denom
     
-  def set_bleus_and_sample_denom(self, bleus, sample_num):
+  def set_bleus_and_loss_params(self, bleus, sample_count=2, alpha=0.005):
     # needed by loss function
     self.bleus = tf.reshape(bleus, [-1])
-    self.sample_loss_norm = sample_num - 1
+    self.alpha = alpha
+    self.sample_loss_norm = sample_count - 1
     
     
   def top(self, body_output, _):

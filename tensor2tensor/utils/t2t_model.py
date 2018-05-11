@@ -397,7 +397,9 @@ class T2TModel(base.Layer):
     Repeat forward pass, now using samples as the 'reference' targets
     NB: this assumes that the encoded inputs have been cached and tiled by the model
     """
-    self._problem_hparams.target_modality.set_bleus_and_sample_denom(bleus, sample_count)
+    self._problem_hparams.target_modality.set_bleus_and_loss_params(bleus,
+                                                                    sample_count,
+                                                                    self.hparams.mrt_alpha)
     flat_samples = beam_search._merge_beam_dim(samples)
     flat_samples = tf.expand_dims(tf.expand_dims(flat_samples, -1), -1)
     features['targets'] = flat_samples
