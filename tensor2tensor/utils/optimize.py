@@ -112,6 +112,13 @@ class ConditionalOptimizer(tf.train.Optimizer):
     return self._opt.apply_gradients(
         grads_and_vars, global_step=global_step, name=name)
 
+class EWCOptimizer(ConditionalOptimizer):
+  def __init__(self, optimizer_name, lr, hparams, use_tpu=False):
+    super(EWCOptimizer, self).__init__(*args, **kwargs)
+    self.save_ewc_step = hparams.ewc_steps_before_accum_fisher
+    self.fisher_accum_batches = hparams.ewc_fisher_accum_steps
+    self.lag_set = hparams.ewc_lagged_collect
+    self.fisher_set = hparams.ewc_fisher_collect
 
 def _sqrt_decay(step):
   """Decay like 1 / sqrt(step), multiplied by 500 to normalize."""

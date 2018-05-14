@@ -294,19 +294,29 @@ class T2TModel(base.Layer):
       loss_num = self.get_ewc_loss(loss_num, loss_den)
     return loss_num, loss_den
 
+  def create_fisher_vars(self):
+    for var in tf.trainable_variables():
+      lagged_name = "{}/lag".format(var.name)
+      fisher_name = "{}/fisher".format(var.name)
+      lagged_var = tf.Variable(tf.zeros_like(var), name=lagged_name, trainable=False)
+      fisher_var = tf.Variable(tf.zeros_like(var), name=fisher_name, trainable=False)
+      tf.add_to_collection(self.hparams.ewc_lagged_collect, lagged_var)
+      tf.add_to_collection(self.hparams.ewc_fisher_collect, fisher_var)
+
+
+
   def get_ewc_loss(self, loss_num, loss_den):
     # get fisher loss using stored variables from previous task
     # add scaled fisher loss to loss_num
     tf.logging.info('Creating lagged variables for EWC loss')
-    for var in tf.trainable_variables():
-      lagged_name = "{}_lag".format(var.name)
-      lagged_var = tf.Variable(tf.zeros_like(var), name=lagged_name, trainable=False)
-      tf.add_to_collection(self.hparams.ewc_collection_name)
+    self.create_fisher_vars()
     if self.hparams.ewc_load_vars:
       tf.logging.info('Adding EWC penalty to loss')
-      penalty = tf.reduce_sum(tf.square(w1 - w2) 
-                              for w1, w2 in zip(
-                tf.trainable_variables(), tf.get_collection(self.hparams.ewc_collection_name)))
+      lagged_vars = tf.get_collection(self.hparams.ewc_lagged_collect)
+      lagged_vars = tf.get_collection(self.hparams.ewc_fisher_collect)
+      penalty = tf.reduce_sum(tf.square(w1 - w2) * f
+                              for w1, w2, f in zip(
+                                  tf.trainable_variables(), lagged_vars, fisher_vars)
       #loss_num += self.hparams.ewc_loss_weight * penalty
     return loss_num
 
