@@ -542,7 +542,7 @@ def fast_decode(encoder_output,
         ],
 )
     scores = None
-  return {"outputs": logits, "scores": scores}
+  return {"outputs": decoded_ids, "scores": scores}
 
 
 def fast_sample(cache,
@@ -570,6 +570,7 @@ def fast_sample(cache,
   def is_not_finished(i, finished, *_):
     return (i < decode_length) & tf.logical_not(tf.reduce_all(finished))
 
+  tf.logging.info('Beginning minimum risk sampling')
   # cache already tiled by calling function
   finished = tf.zeros([batch_size, sample_num], dtype=tf.bool)
   next_id = beam_search._expand_to_beam_size(tf.zeros([batch_size], dtype=tf.int64),
