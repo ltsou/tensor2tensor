@@ -228,9 +228,8 @@ class Transformer(t2t_model.T2TModel):
     return t
 
   def _initialize_cache(self, features, getting_samples=False):
-    with tf.variable_scope("body", reuse=tf.AUTO_REUSE):
-      enc_out, enc_dec_attn_bias = (None, None)
-      if not self.mrt_cache:
+    enc_out, enc_dec_attn_bias = (None, None)
+    if not self.mrt_cache:
         tf.logging.info('getting encoding for the first time')
         enc_out, enc_dec_attn_bias = self.encode(features["inputs"],
                                                  features["target_space_id"],

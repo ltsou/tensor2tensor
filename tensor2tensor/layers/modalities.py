@@ -172,6 +172,13 @@ class MRTSymbolModality(SymbolModality):
     self.alpha = 0.005
 
   def loss(self, logits, targets):
+    ce = common_layers.padded_cross_entropy(logits,
+                                            targets,
+                                            self._model_hparams.label_smoothing,
+                                            weights_fn=self.targets_weights_fn,
+                                            reduce_sum=False)
+
+    '''
     target_shape = common_layers.shape_list(targets)
     batch_size = target_shape[0]
     timesteps = target_shape[1]
@@ -184,14 +191,13 @@ class MRTSymbolModality(SymbolModality):
                          [batch_size, -1, 1])
     gather_ids = tf.concat([batch_ids, pos_ids, ids], axis=2)
     sentence_tok_log_probs = tf.gather_nd(reshaped_logits, gather_ids) - log_prob_norm # shape: [batch_size, timesteps]
+    '''
     weights = self.targets_weights_fn(tf.squeeze(targets))
     loss_denom = tf.reduce_sum(weights)
-    sentence_neg_log_probs = tf.reduce_sum(weights * sentence_tok_log_probs, axis=1)
     if self.bleus is not None:
-      sentence_neg_log_probs *= self.bleus
+      ce *= self.bleus * self.alpha
       loss_denom *= self.sample_loss_norm
-    sentence_neg_log_probs *= self.alpha
-    return sentence_neg_log_probs, loss_denom
+    return tf.reduce_sum(ce), loss_denom
     
   def set_bleus_and_loss_params(self, bleus, sample_count=2, alpha=0.005):
     # needed by loss function
