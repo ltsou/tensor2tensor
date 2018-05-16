@@ -216,15 +216,15 @@ class Transformer(t2t_model.T2TModel):
     else:
       tf.logging.info('getting encoding from cache')
       t = self.mrt_cache[label]
-      if self.mrt_called:
-        tile_num = self.hparams.mrt_sample_num
-        tf.logging.info('tiling encoding')
-        if self.hparams.mrt_use_ref_score and not getting_samples:
-          tf.logging.info('increasing tiling to use ref')
-          tile_num = self.hparams.mrt_sample_num + 1
-        t = beam_search._expand_to_beam_size(t, tile_num)
-        if not getting_samples:
-          t = beam_search._merge_beam_dim(t)
+    if self.mrt_called:
+      tile_num = self.hparams.mrt_sample_num
+      tf.logging.info('tiling encoding')
+      if self.hparams.mrt_use_ref_score and not getting_samples:
+        tf.logging.info('increasing tiling to use ref')
+        tile_num = self.hparams.mrt_sample_num + 1
+      t = beam_search._expand_to_beam_size(t, tile_num)
+      if not getting_samples:
+        t = beam_search._merge_beam_dim(t)
     return t
 
   def _initialize_cache(self, features, getting_samples=False):

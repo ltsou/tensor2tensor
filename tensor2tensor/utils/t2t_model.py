@@ -191,6 +191,9 @@ class T2TModel(base.Layer):
   def model_fn(self, features):
     original_features = features
     transformed_features = self.bottom(features)
+    get_minimum_risk_samples = (not self.mrt_called and 
+                                self.hparams.mode == tf.estimator.ModeKeys.TRAIN and
+                                self.hparams.minimum_risk_train)
     with tf.variable_scope("body"):
       tf.logging.info("Building model body")
       body_out = self.body(transformed_features)
@@ -202,9 +205,7 @@ class T2TModel(base.Layer):
     else:
       logits = self.top(output, features)
       losses["training"] = self.loss(logits, features)
-    if (not self.mrt_called and
-        self.hparams.mode == tf.estimator.ModeKeys.TRAIN and
-        self.hparams.minimum_risk_train):
+    if get_minimum_risk_samples:
       self.mrt_called = True
       logits, losses = self.minimum_risk_training(transformed_features, original_features)
     return logits, losses
