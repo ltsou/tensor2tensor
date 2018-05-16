@@ -206,46 +206,6 @@ class MRTSymbolModality(SymbolModality):
     self.sample_loss_norm = sample_count - 1
     
     
-  def top(self, body_output, _):
-    """Generate logits.
-
-    Args:
-      body_output: A Tensor with shape [batch, p0, p1, body_input_depth]
-    Returns:
-      logits: A Tensor with shape  [batch, p0, p1, ?, vocab_size].
-    """
-    if self._model_hparams.symbol_modality_skip_top:
-      return tf.expand_dims(body_output, 3)
-
-    if self._model_hparams.shared_embedding_and_softmax_weights:
-      scope_name = "shared"
-      reuse = True
-    else:
-      scope_name = "softmax"
-      reuse = tf.AUTO_REUSE
-
-    with tf.variable_scope(scope_name, reuse=reuse):
-      body_output_shape = common_layers.shape_list(body_output)
-      var = self._get_weights(body_output_shape[-1])
-      if (self._model_hparams.factored_logits and
-          self._model_hparams.mode == tf.estimator.ModeKeys.TRAIN):
-        # insert channels dimension
-        body_output = tf.expand_dims(body_output, 3)
-        return common_layers.FactoredTensor(body_output, var)
-      else:
-        body_output = tf.reshape(body_output, [-1, body_output_shape[-1]])
-        logits = tf.matmul(body_output, var, transpose_b=True)
-        if (common_layers.is_on_tpu() and
-            self._model_hparams.mode == tf.estimator.ModeKeys.TRAIN):
-          # TPU does not react kindly to extra dimensions.
-          # TODO(noam): remove this once TPU is more forgiving of extra dims.
-          return logits
-        else:
-          return tf.reshape(
-              logits, body_output_shape[:-1] + [1, self._vocab_size])
-
-
-
 @registry.register_symbol_modality("ctc")
 class CTCSymbolModality(SymbolModality):
   """SymbolModality that uses CTC loss."""

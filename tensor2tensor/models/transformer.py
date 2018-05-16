@@ -255,7 +255,7 @@ class Transformer(t2t_model.T2TModel):
         decode_length + 1, hparams.hidden_size)
       
     def preprocess_targets(targets, i):
-      with tf.variable_scope(target_modality.name, reuse=tf.AUTO_REUSE):
+      with tf.variable_scope(target_modality.name):
         targets = target_modality.targets_bottom(targets)
       targets = common_layers.flatten4d3d(targets)
       if hparams.pos == "timing":
@@ -275,13 +275,13 @@ class Transformer(t2t_model.T2TModel):
       targets = preprocess_targets(targets, i)
       bias = decoder_self_attention_bias[:, :, i:i + 1, :i + 1]
 
-      with tf.variable_scope("body", reuse=tf.AUTO_REUSE):
+      with tf.variable_scope("body"):
         body_outputs = self.decode(targets, cache["encoder_output"],
             cache["encoder_decoder_attention_bias"], bias, hparams, cache,
             nonpadding=features_to_nonpadding(features, "targets"))
 
-        with tf.variable_scope(target_modality.name, reuse=tf.AUTO_REUSE):
-          logits = target_modality.top(body_outputs, None)
+      with tf.variable_scope(target_modality.name):
+        logits = target_modality.top(body_outputs, None)
       return tf.squeeze(logits, axis=[1, 2, 3]), cache
 
     batch_size = common_layers.shape_list(encoder_output)[0]
@@ -554,17 +554,16 @@ def fast_sample(cache,
                 eos_id=beam_search.EOS_ID):
 
   def inner_loop(i, finished, next_id, decoded_ids, cache):
-    with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
-      flat_ids = tf.reshape(next_id, [batch_size * sample_num, -1])
-      flat_cache = nest.map_structure(beam_search._merge_beam_dim, cache)
-      flat_logits, flat_cache = symbols_to_logits_fn(flat_ids, i, flat_cache)
-      cache = nest.map_structure(
-            lambda t: beam_search._unmerge_beam_dim(t, batch_size, sample_num), flat_cache)
-      flat_next_id = common_layers.sample_with_temperature(flat_logits, hparams.sampling_temp)
-      next_id = tf.reshape(flat_next_id, [batch_size, sample_num])
-      finished |= tf.equal(next_id, eos_id)
-      decoded_ids = tf.concat([decoded_ids, tf.expand_dims(next_id, 2)], 2)
-      return i + 1, finished, next_id, decoded_ids, cache
+    flat_ids = tf.reshape(next_id, [batch_size * sample_num, -1])
+    flat_cache = nest.map_structure(beam_search._merge_beam_dim, cache)
+    flat_logits, flat_cache = symbols_to_logits_fn(flat_ids, i, flat_cache)
+    cache = nest.map_structure(
+          lambda t: beam_search._unmerge_beam_dim(t, batch_size, sample_num), flat_cache)
+    flat_next_id = common_layers.sample_with_temperature(flat_logits, hparams.sampling_temp)
+    next_id = tf.reshape(flat_next_id, [batch_size, sample_num])
+    finished |= tf.equal(next_id, eos_id)
+    decoded_ids = tf.concat([decoded_ids, tf.expand_dims(next_id, 2)], 2)
+    return i + 1, finished, next_id, decoded_ids, cache
 
   def is_not_finished(i, finished, *_):
     return (i < decode_length) & tf.logical_not(tf.reduce_all(finished))

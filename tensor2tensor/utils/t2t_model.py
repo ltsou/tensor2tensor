@@ -194,14 +194,14 @@ class T2TModel(base.Layer):
     with tf.variable_scope("body"):
       tf.logging.info("Building model body")
       body_out = self.body(transformed_features)
-      output, losses = self._normalize_body_output(body_out)
-      if "training" in losses:
-        tf.logging.info("Skipping T2TModel top and loss because training loss "
-                          "returned from body")
-        logits = output
-      else:
-        logits = self.top(output, features)
-        losses["training"] = self.loss(logits, features)
+    output, losses = self._normalize_body_output(body_out)
+    if "training" in losses:
+      tf.logging.info("Skipping T2TModel top and loss because training loss "
+                      "returned from body")
+      logits = output
+    else:
+      logits = self.top(output, features)
+      losses["training"] = self.loss(logits, features)
     if (not self.mrt_called and
         self.hparams.mode == tf.estimator.ModeKeys.TRAIN and
         self.hparams.minimum_risk_train):
