@@ -215,16 +215,14 @@ def basic_params1():
       no_data_parallelism=False,
       # if ewc_load_vars is true, must have saved ewc vars in the loaded checkpoint
       ewc_load_vars=False,
-      # number of minibatches to use when recomputing Fisher diagonal for EWC
-      ewc_fisher_num_samples=100,
       ewc_loss_weight=0.5,
       # location to save task vars during elastic weight consolidation
       ewc_save_vars=False,
       # name to group vars under EWC
       ewc_lagged_collect='EWC',
       ewc_fisher_collect='FISHER',
-      ewc_steps_before_accum_fisher=99000,
-      ewc_fisher_accum_steps = 1000,
+      #number of minibatches to use when recomputing Fisher diagonal for EWC
+      ewc_fisher_accum_steps=200,
   )
 
 

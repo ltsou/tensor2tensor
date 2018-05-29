@@ -241,6 +241,11 @@ def create_experiment(run_config,
                       eval_early_stopping_metric_minimize=True,
                       use_tpu=False):
   """Create Experiment."""
+  if hparams.ewc_save_vars:
+    ewc_steps = hparams.ewc_fisher_accum_steps
+    tf.logging.info('Adding extra {} steps to calculate fisher scores'.format(ewc_steps))
+    train_steps += ewc_steps
+
   # HParams
   hparams.add_hparam("data_dir", data_dir)
   hparams.add_hparam("train_steps", train_steps)
@@ -306,7 +311,6 @@ def create_experiment(run_config,
         validation_monitor_kwargs=validation_monitor_kwargs,
         early_stopping_kwargs=early_stopping_kwargs)
     hooks_kwargs = {"train_monitors": train_monitors, "eval_hooks": eval_hooks}
-
   # Experiment
   return tf.contrib.learn.Experiment(
       estimator=estimator,
