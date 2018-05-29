@@ -437,7 +437,10 @@ class T2TModel(base.Layer):
         else:
           bleu = 1 - bleu
         batch_bleus.append(bleu)
-      sentence_bleus.append(batch_bleus - np.mean(batch_bleus))
+      if self.hparams.mrt_subtract_av_bleu:
+        sentence_bleus.append(batch_bleus - np.mean(batch_bleus))
+      else:
+        sentence_bleus.append(batch_bleus)
     return np.asarray(sentence_bleus, dtype=np.float32)
 
     

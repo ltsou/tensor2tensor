@@ -222,6 +222,7 @@ def basic_params1():
       mrt_bleu_smooth=True,
       mrt_use_ref_score=True,
       mrt_use_negative_loss=True,
+      mrt_subtract_av_bleu=False,
   )
 
 
