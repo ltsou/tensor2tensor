@@ -311,15 +311,22 @@ class T2TModel(base.Layer):
     tf.logging.info('Creating lagged variables for EWC loss')
     self.create_fisher_vars()
     if self.hparams.ewc_load_vars:
-      tf.logging.info('Adding EWC penalty to loss')
+      tf.logging.info('Adding EWC penalty to loss with lambda {}'.format(
+        self.hparams.ewc_loss_weight))
       lagged_vars = tf.get_collection(self.hparams.ewc_lagged_collect)
       fisher_vars = tf.get_collection(self.hparams.ewc_fisher_collect)
       penalty = tf.add_n([tf.reduce_sum(tf.square(l - t) * f) 
                           for l, t, f in zip(
                               lagged_vars, tf.trainable_variables(), fisher_vars)])
-      loss_num += self.hparams.ewc_loss_weight * penalty
+      ewc_loss = self.hparams.ewc_loss_weight * penalty * loss_den
+      #tmp = tf.py_func(self.print_tensor, [ewc_loss], tf.float32)
+      loss_num += ewc_loss #+ 0 * tf.reduce_sum(tmp)
     return loss_num
 
+  def print_tensor(self, t):
+    # hacky way to printing a tensor during training
+    tf.logging.info(t)
+    return t
 
   def optimize(self, loss, num_async_replicas=1):
     """Return a training op minimizing loss."""
