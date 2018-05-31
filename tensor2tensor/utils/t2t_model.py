@@ -295,11 +295,11 @@ class T2TModel(base.Layer):
     return loss_num, loss_den
 
   def create_fisher_vars(self):
-    for var in tf.trainable_variables():
+    for idx, var in enumerate(tf.trainable_variables()):
       with tf.variable_scope('lagged'):
         lagged_var = tf.Variable(tf.zeros_like(var), trainable=False)
       with tf.variable_scope('fisher'):
-        fisher_var = tf.Variable(tf.zeros_like(var), trainable=False)
+        fisher_var = tf.Variable(0.0, trainable=False)
       tf.add_to_collection(self.hparams.ewc_lagged_collect, lagged_var)
       tf.add_to_collection(self.hparams.ewc_fisher_collect, fisher_var)
 
@@ -314,11 +314,16 @@ class T2TModel(base.Layer):
       tf.logging.info('Adding EWC penalty to loss')
       lagged_vars = tf.get_collection(self.hparams.ewc_lagged_collect)
       fisher_vars = tf.get_collection(self.hparams.ewc_fisher_collect)
-      penalty = tf.reduce_sum(tf.square(w1 - w2) * f
-                              for w1, w2, f in zip(
-                                  tf.trainable_variables(), lagged_vars, fisher_vars))
-      loss_num += self.hparams.ewc_loss_weight * penalty
+      #tmp = tf.py_func(self.hacky_print, [lagged_vars[0]], tf.float32)
+      penalty = tf.add_n([tf.reduce_sum(tf.square(l - t)) 
+                          for l, t in zip(lagged_vars, tf.trainable_variables())])
+      loss_num += self.hparams.ewc_loss_weight * penalty# + 0 * tf.reduce_sum(tmp)
     return loss_num
+
+
+  def hacky_print(self, t):
+    tf.logging.info(t)
+    return t
 
   def optimize(self, loss, num_async_replicas=1):
     """Return a training op minimizing loss."""

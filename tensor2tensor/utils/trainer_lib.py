@@ -302,6 +302,7 @@ def create_experiment(run_config,
     local_schedules = ["train_and_evaluate", "continuous_train_and_eval"]
     use_early_stopping = (
         schedule not in local_schedules and eval_early_stopping_steps)
+
     train_monitors, eval_hooks = create_hooks(
         use_tfdbg=use_tfdbg,
         use_dbgprofile=use_dbgprofile,
