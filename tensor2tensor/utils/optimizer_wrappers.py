@@ -87,23 +87,12 @@ class EWCOptimizer(ConditionalOptimizer):
     super(EWCOptimizer, self).__init__(optimizer_name, lr, hparams, use_tpu)
     self.final_step = hparams.train_steps
     self.save_ewc_step = hparams.train_steps - hparams.ewc_fisher_accum_steps
-    tf.logging.info('we do {} steps before accumulating fisher'.format(self.save_ewc_step))
+    tf.logging.info('Train {} steps before accumulating fisher'.format(self.save_ewc_step))
     self.fisher_accum_steps = hparams.ewc_fisher_accum_steps
-    tf.logging.info('we then accumulate for {} steps'.format(self.fisher_accum_steps))
+    tf.logging.info('Then accumulate for {} steps'.format(self.fisher_accum_steps))
     self.lag_set = hparams.ewc_lagged_collect
     self.fisher_set = hparams.ewc_fisher_collect
 
-  '''
-  def compute_gradients(self, loss, var_list=None, **kwargs):
-    # NB: THIS FUNCTION UPDATES THE FISHER VARS, WHICH MAY THEN BE USED TO CALCULATE THE LOSS
-    # TODO: this optimizer should update temporary variables which should only update the
-    # working fisher vars at the end of training.
-    global_step = tf.train.get_or_create_global_step()
-    return tf.cond(tf.greater_equal(global_step, self.save_ewc_step),
-                   lambda: [tf.no_op() for v in var_list],#self._compute_fisher_vars(loss),
-                   lambda: self._opt.compute_gradients(loss, var_list, **kwargs))
-  '''
- 
 
   def accumulate_fisher(self, grads_and_vars, global_step, name):
     fisher_vars = tf.get_collection(self.fisher_set)
@@ -111,12 +100,9 @@ class EWCOptimizer(ConditionalOptimizer):
     scale = 1.0 / self.fisher_accum_steps
     for grad_var_pair, f in zip(grads_and_vars, fisher_vars):
       grad, _ = grad_var_pair
-      sum_square = tf.reduce_sum(tf.square(grad))
-      accumulate_fisher_ops.append(f.assign_add(sum_square * scale))
+      accumulate_fisher_ops.append(f.assign_add(tf.square(grad) * scale))
     return control_flow_ops.group(*accumulate_fisher_ops)
       
-
-
 
 
   def apply_gradients(self, grads_and_vars, global_step=None, name=None):
