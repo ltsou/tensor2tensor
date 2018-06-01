@@ -148,15 +148,20 @@ class EWCOptimizer(ConditionalOptimizer):
 
 
   def check_checkpoint_vars(self):
-    # may be saving EWC variables to a model previously trained without them
-    # if so, need to add EWC vars to the checkpoint: this is a hacky way to do so
+    '''May be saving EWC variables to a model previously trained without them
+    if so, need to add EWC vars to the checkpoint: this is a hacky way to do so.
+    For some reason this has to be done on CPU, but once we have a checkpoint 
+    with the needed variables, accumulation can be done on GPU.
+    '''
     new_vars = tf.get_collection(self.lag_set) + tf.get_collection(self.fisher_set)
     checkpoint_file = tf.train.latest_checkpoint(self.model_dir)
     tf.logging.info('Checking checkpoint {} for EWC variables'.format(checkpoint_file))
     reader = tf.train.NewCheckpointReader(checkpoint_file)
     ewc_checkpoint = '{}_ewc'.format(checkpoint_file)
-    if not reader.has_tensor(new_vars[0].name):
-      tf.logging.info('No EWC variables found: adding to checkpoint file')
+    sample_var_name = new_vars[0].name.split(':')[0]
+    if not reader.has_tensor(sample_var_name):
+      tf.logging.info('{} not found: adding EWC vars to checkpoint file'.format(
+        new_vars[0].name))
       restorer = self.get_old_restorer(new_vars)
       saver = tf.train.Saver()
       with tf.Session() as s:
