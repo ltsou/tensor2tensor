@@ -243,8 +243,11 @@ def create_experiment(run_config,
   """Create Experiment."""
   if hparams.ewc_save_vars:
     ewc_steps = hparams.ewc_fisher_accum_steps
+    hparams.add_hparam("model_dir", run_config.model_dir)
     tf.logging.info('Adding extra {} steps to calculate fisher scores'.format(ewc_steps))
     train_steps += ewc_steps
+  if hparams.ewc_load_vars:
+    hparams.add_hparam("model_dir", run_config.model_dir)
 
   # HParams
   hparams.add_hparam("data_dir", data_dir)

@@ -85,86 +85,103 @@ class ConditionalOptimizer(tf.train.Optimizer):
 class EWCOptimizer(ConditionalOptimizer):
   def __init__(self, optimizer_name, lr, hparams, use_tpu=False):
     super(EWCOptimizer, self).__init__(optimizer_name, lr, hparams, use_tpu)
-    self.final_step = hparams.train_steps
-    self.save_ewc_step = hparams.train_steps - hparams.ewc_fisher_accum_steps
-    tf.logging.info('Train {} steps before accumulating fisher'.format(self.save_ewc_step))
-    self.fisher_accum_steps = hparams.ewc_fisher_accum_steps
-    tf.logging.info('Then accumulate for {} steps'.format(self.fisher_accum_steps))
+    self.load_vars = hparams.ewc_load_vars
+    self.save_vars = hparams.ewc_save_vars
+    self.ewc_loss_weight = hparams.ewc_loss_weight
+    self.model_dir = hparams.model_dir
+
     self.lag_set = hparams.ewc_lagged_collect
     self.fisher_set = hparams.ewc_fisher_collect
 
+    self.final_step = hparams.train_steps
+    self.save_ewc_step = None
+    self.fisher_accum_steps = None
+    self.set_steps(hparams)
 
-  def accumulate_fisher(self, grads_and_vars, global_step, name):
+  def set_steps(self, hparams):
+    if self.save_vars:
+      self.save_ewc_step = hparams.train_steps - hparams.ewc_fisher_accum_steps
+      tf.logging.info('Train {} steps before accumulating fisher'.format(self.save_ewc_step))
+      self.fisher_accum_steps = hparams.ewc_fisher_accum_steps
+      tf.logging.info('Then accumulate for {} steps'.format(self.fisher_accum_steps))
+
+
+  def accumulate_fisher_and_lagged(self, grads_and_vars, global_step, name):
     fisher_vars = tf.get_collection(self.fisher_set)
-    accumulate_fisher_ops = [global_step.assign_add(1)]
+    lagged_vars = tf.get_collection(self.lag_set)
+    ewc_ops = [global_step.assign_add(1)]
     scale = 1.0 / self.fisher_accum_steps
-    for grad_var_pair, f in zip(grads_and_vars, fisher_vars):
-      grad, _ = grad_var_pair
-      accumulate_fisher_ops.append(f.assign_add(tf.square(grad) * scale))
-    return control_flow_ops.group(*accumulate_fisher_ops)
+    for grad_var_pair, f, l in zip(grads_and_vars, fisher_vars, lagged_vars):
+      grad, var = grad_var_pair
+      ewc_ops.append(f.assign_add(tf.square(grad) * scale))
+      ewc_ops.append(l.assign(var))
+    return control_flow_ops.group(*ewc_ops)
       
 
 
   def apply_gradients(self, grads_and_vars, global_step=None, name=None):
-    maybe_accumulate_fisher = tf.cond(tf.greater_equal(global_step, self.save_ewc_step),
-                                      lambda: self.accumulate_fisher(
-                                        grads_and_vars, global_step=global_step, name=name),
-                                      lambda: self._opt.apply_gradients(
-                                        grads_and_vars, global_step=global_step, name=name))
-    with ops.control_dependencies([maybe_accumulate_fisher]):
-      def update_lagged_op():
-        train_vars = tf.trainable_variables()
-        lagged_vars = tf.get_collection(self.lag_set)
-        update_lagged_ops = []
-        for v, t in zip(lagged_vars, train_vars):
-          update_lagged_ops.append(v.assign(t))
-        return control_flow_ops.group(*update_lagged_ops)
+    if self.save_vars:
+      maybe_accumulate_fisher = tf.cond(tf.greater_equal(global_step, self.save_ewc_step),
+                                        lambda: self.accumulate_fisher_and_lagged(
+                                          grads_and_vars, global_step=global_step, name=name),
+                                        lambda: self._opt.apply_gradients(
+                                          grads_and_vars, global_step=global_step, name=name))
+      return maybe_accumulate_fisher
+    else:
+      return self._opt.apply_gradients(grads_and_vars, global_step=global_step, name=name)
 
-      train_op = ops.get_collection_ref(ops.GraphKeys.TRAIN_OP)
-      maybe_update_lagged = tf.cond(tf.equal(global_step, self.final_step),
-                                    lambda: update_lagged_op(),
-                                    lambda: tf.no_op())
-      train_op.append(maybe_update_lagged)
-      return maybe_update_lagged
+  def compute_gradients(self, loss, var_list=None, **kwargs):
+    tf.logging.info('Creating lagged variables for EWC loss')
+    self.create_fisher_vars()
+    if self.load_vars:
+      loss += self.get_ewc_loss()
+    return self._opt.compute_gradients(loss, var_list, **kwargs)
+
+  def create_fisher_vars(self):
+    for idx, var in enumerate(tf.trainable_variables()):
+      with tf.variable_scope('lagged'):
+        lagged_var = tf.Variable(tf.zeros_like(var), trainable=False)
+      with tf.variable_scope('fisher'):
+        fisher_var = tf.Variable(tf.zeros_like(var), trainable=False)
+      tf.add_to_collection(self.lag_set, lagged_var)
+      tf.add_to_collection(self.fisher_set, fisher_var)
 
 
-  def _apply_dense(self, grad, var):
-    return self._apply_cond(
-      self._opt._apply_sparse_shared, grad, var)
+  def check_checkpoint_vars(self):
+    # may be saving EWC variables to a model previously trained without them
+    # if so, need to add EWC vars to the checkpoint: this is a hacky way to do so
+    new_vars = tf.get_collection(self.lag_set) + tf.get_collection(self.fisher_set)
+    checkpoint_file = tf.train.latest_checkpoint(self.model_dir)
+    tf.logging.info('Checking checkpoint {} for EWC variables'.format(checkpoint_file))
+    reader = tf.train.NewCheckpointReader(checkpoint_file)
+    ewc_checkpoint = '{}_ewc'.format(checkpoint_file)
+    if not reader.has_tensor(new_vars[0].name):
+      tf.logging.info('No EWC variables found: adding to checkpoint file')
+      restorer = self.get_old_restorer(new_vars)
+      saver = tf.train.Saver()
+      with tf.Session() as s:
+        s.run(tf.variables_initializer(new_vars))
+        restorer.restore(s, checkpoint_file)
+        tf.logging.info('Resaving model with EWC variables to {}'.format(ewc_checkpoint))
+        saver.save(s, ewc_checkpoint)
 
-  def _resource_apply_dense(self, grad, var):
-    return self._apply_cond(
-      self._opt._apply_sparse_shared, grad, var)
 
-  def _apply_sparse_shared(self, grad, var, indices, scatter_add):
-    return self._apply_cond(
-      self._opt._apply_sparse_shared, grad, var, indices, scatter_add)
-
-  def _apply_sparse(self, grad, var):
-    return self._apply_cond(
-      self._opt._apply_sparse, grad, var)
-
-  def _create_slots(self, var_list):
-    """Like subclass method, but additionally creates slots for
-    fisher and lagged parameter updates
-    """
-    self._opt._create_slots(var_list)
-    # Create slots for fisher grad accumulation
-    for v in tf.get_collection(self.lag_set):
-      self._opt._zeros_slot(v, "fisher_acc", self._name)
+  def get_old_restorer(self, new_vars):
+    global_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
+    new_vars_set = set(new_vars)
+    restore_vars = []
+    for v in global_vars:
+      if v not in new_vars_set:
+        restore_vars.append(v)
+    return tf.train.Saver(restore_vars)
       
 
-  def _apply_cond(self, apply_fn, grad, var, *args, **kwargs):
-    """Call `apply_fn conditionally
-    Args:
-      apply_fn: Callback function for applying gradients.
-      grad: Gradients (grad variable in _apply_*() methods)
-      var: variable (var variable in _apply_*() methods)
-      *args: Passed through to `apply_fn`
-      **kwargs: Passed through to `apply_fn`
-    """
-    """
-    def accum_fisher(
-
-    """
-    return apply_fn(grad, var, *args, **kwargs)
+  def get_ewc_loss(self):
+    tf.logging.info('Adding EWC penalty to loss with lambda {}'.format(self.ewc_loss_weight))
+    lagged_vars = tf.get_collection(self.lag_set)
+    fisher_vars = tf.get_collection(self.fisher_set)
+    penalty = tf.add_n([tf.reduce_sum(tf.square(l - t) * f)
+                        for l, t, f in zip(
+                            lagged_vars, tf.trainable_variables(), fisher_vars)])
+    ewc_loss = self.ewc_loss_weight * penalty
+    return ewc_loss

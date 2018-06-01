@@ -43,7 +43,7 @@ def optimize(loss, learning_rate, hparams, use_tpu=False):
   ]
   log_variable_sizes(
       diet_vars, "Diet Variables", verbose=hparams.summarize_vars)
-  if hparams.ewc_save_vars:
+  if hparams.ewc_save_vars or hparams.ewc_load_vars:
     opt = EWCOptimizer(hparams.optimizer, learning_rate, hparams, use_tpu)
   else:
     opt = ConditionalOptimizer(hparams.optimizer, learning_rate, hparams, use_tpu)
@@ -72,6 +72,10 @@ def optimize(loss, learning_rate, hparams, use_tpu=False):
       optimizer=opt,
       summaries=opt_summaries,
       colocate_gradients_with_ops=True)
+
+  if hparams.ewc_save_vars or hparams.ewc_load_vars:
+    tf.logging.info('outside op, checkign vars')
+    opt.check_checkpoint_vars()
   return train_op
 
 
