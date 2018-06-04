@@ -205,7 +205,6 @@ class MRTSymbolModality(SymbolModality):
     if len(ce.get_shape())>1:
       ce = tf.reduce_sum(ce, axis=1)
       ce = tf.squeeze(ce)
-    #t = tf.py_func(self.get_ref_ce, [ce, loss_denom], tf.float32) # hack to check ref nll
     if self.bleus is not None:
       ce *= self.bleus * self.alpha
       loss_denom *= self.sample_loss_norm# + 0 * t

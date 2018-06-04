@@ -207,7 +207,8 @@ class T2TModel(base.Layer):
       losses["training"] = self.loss(logits, features)
     if get_minimum_risk_samples:
       self.mrt_called = True
-      logits, losses = self.minimum_risk_training(transformed_features, original_features)
+      logits, losses = self.minimum_risk_training(transformed_features, original_features,
+                                                  losses)
     return logits, losses
 
   def bottom(self, features):
@@ -369,11 +370,12 @@ class T2TModel(base.Layer):
     """Called before inference to allow adding infer-specific features."""
     pass
 
-  def minimum_risk_training(self, transformed_features, orig_features):
+  def minimum_risk_training(self, transformed_features, orig_features, orig_losses):
     """
     args:
     transformed_features: transformed_features passed through bottom of model
     orig_features: untransformed features
+    orig_losses: dictionary of losses from first forward pass
     """
     assert self.hparams.sampling_method == "random"
     decode_length = self.hparams.mrt_decode_length
@@ -381,7 +383,8 @@ class T2TModel(base.Layer):
     orig_targets = tf.squeeze(orig_features['targets'], [2, 3])
     sample_count, samples = self._maybe_add_ref(samples, orig_targets)
     bleus = tf.py_func(self._get_sentence_bleu, [samples, orig_targets], tf.float32)
-    logits, losses =  self._forward_pass_samples(orig_features, samples, bleus, sample_count)
+    logits, losses =  self._forward_pass_samples(orig_features, samples, bleus, sample_count, 
+                                                 orig_losses)
     return logits, losses
   
   def _maybe_add_ref(self, samples, orig_targets):
@@ -393,7 +396,7 @@ class T2TModel(base.Layer):
       sample_count += 1
     return sample_count, samples
 
-  def _forward_pass_samples(self, features, samples, bleus, sample_count):
+  def _forward_pass_samples(self, features, samples, bleus, sample_count, orig_losses):
     """
     Repeat forward pass, now using samples as the 'reference' targets
     NB: this assumes that the encoded inputs have been cached and tiled by the model
@@ -404,8 +407,24 @@ class T2TModel(base.Layer):
     flat_samples = beam_search._merge_beam_dim(samples)
     flat_samples = tf.expand_dims(tf.expand_dims(flat_samples, -1), -1)
     features['targets'] = flat_samples
-    logits, losses = self(features) # shape [batch_size * sample_num]
+    logits, losses = self.model_fn(features) # shape [batch_size * sample_num]
+    orig_loss_num, orig_loss_den = orig_losses['training']
+    new_loss_num, new_loss_den = losses['training']
+    scaled_orig_loss = orig_loss_num * new_loss_den
+    scaled_new_loss = new_loss_num * orig_loss_den
+    scaled_den = orig_loss_den * new_loss_den
+    # the following is a hacky way to print tensors during training...
+    a = 0.0
+    if self.hparams.mrt_log_split_loss:
+      a = tf.py_func(self.training_print, [scaled_orig_loss, scaled_new_loss, scaled_den],
+                     tf.float32)
+      a = tf.reduce_sum(a)
+    losses['training'] = (scaled_new_loss + scaled_orig_loss + 0.0*a, scaled_den)
     return logits, losses
+    
+  def training_print(self, original, new, den):
+    tf.logging.info('Original loss: {}, MRT (bleu-scaled) loss: {}'. format(original/den, new/den))
+    return original
 
   
   def _get_sentence_bleu(self, samples, targets, max_order=4):
