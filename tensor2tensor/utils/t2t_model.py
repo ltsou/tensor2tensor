@@ -387,9 +387,25 @@ class T2TModel(base.Layer):
                                                  orig_losses)
     return logits, losses
   
+  def _trim_eos_samples(self, samples):
+    '''trim sampled sentences from first EOS token. 
+    '''
+    trimmed_samples = []
+    max_len = max([max([len(s) for s in sample_batch]) for sample_batch in samples])
+    for sample_batch in samples:
+      trimmed_batch = []
+      for sample in sample_batch:
+        hyp = decoding._save_until_eos(sample, is_image=False)
+        padded_hyp = np.pad(hyp, [0, max_len - len(hyp)], 'constant')
+        trimmed_batch.append(padded_hyp)
+      trimmed_samples.append(trimmed_batch)
+    return np.asarray(trimmed_samples, dtype=np.int32)
+
   def _maybe_add_ref(self, samples, orig_targets):
-    samples = tf.cast(samples, tf.int32) # sample shape: [batch_size, sample_num, timesteps]
+    samples = tf.py_func(self._trim_eos_samples, [samples], tf.int32)
     sample_count = self.hparams.mrt_sample_num
+    target_shape = common_layers.shape_list(orig_targets)
+    samples = tf.reshape(samples, [target_shape[0], sample_count, -1])
     if self.hparams.mrt_use_ref_score:
       padded_target = tf.pad(orig_targets, [[0, 0], [0, self.hparams.mrt_decode_length]])
       samples = tf.concat([samples, tf.expand_dims(padded_target, axis=1)], axis=1)
