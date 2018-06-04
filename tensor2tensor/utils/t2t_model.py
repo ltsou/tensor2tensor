@@ -413,13 +413,15 @@ class T2TModel(base.Layer):
     scaled_orig_loss = orig_loss_num * new_loss_den
     scaled_new_loss = new_loss_num * orig_loss_den
     scaled_den = orig_loss_den * new_loss_den
-    # the following is a hacky way to print tensors during training...
+    # the following is a hacky but simple way to print tensors during training...
     a = 0.0
     if self.hparams.mrt_log_split_loss:
       a = tf.py_func(self.training_print, [scaled_orig_loss, scaled_new_loss, scaled_den],
                      tf.float32)
       a = tf.reduce_sum(a)
-    losses['training'] = (scaled_new_loss + scaled_orig_loss + 0.0*a, scaled_den)
+      losses['training'] = (new_loss_num + 0.0*a, new_loss_den)
+    if self.hparams.mrt_add_ref_xentropy:
+      losses['training'] = (scaled_new_loss + scaled_orig_loss + 0.0*a, scaled_den)
     return logits, losses
     
   def training_print(self, original, new, den):
