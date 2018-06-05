@@ -213,6 +213,13 @@ def basic_params1():
       force_full_predict=False,
       # Set this for pure model parallelism.  There is only one data shard.
       no_data_parallelism=False,
+      # set this if averaging model hidden layer attentions across all layers
+      attention_loss_all_layers=False,
+      # index (starting at 0) of layer to extract attn from if not averaging over all layers
+      attention_loss_layer=0,
+      # attention loss types: mse, kl_divergence
+      expected_attention_loss_type="mse",
+      expected_attention_loss_multiplier=1.0,
   )
 
 
@@ -335,6 +342,7 @@ def basic_range1(ranged_hparams):
 
   rhp.set_discrete("batch_size", [1024, 2048, 4096])
   rhp.set_discrete("num_hidden_layers", [1, 2, 3, 4, 5, 6])
+  rhp.set_discrete("attn_loss_layer", [0, 1, 2, 3, 4, 5])
   rhp.set_discrete("hidden_size", [32, 64, 128, 256, 512], scale=rhp.LOG_SCALE)
   rhp.set_discrete("kernel_height", [1, 3, 5, 7])
   rhp.set_discrete("kernel_width", [1, 3, 5, 7])

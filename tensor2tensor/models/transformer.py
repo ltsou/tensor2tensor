@@ -164,6 +164,27 @@ class Transformer(t2t_model.T2TModel):
                        decoder_self_attention_bias, hparams,
                        nonpadding=features_to_nonpadding(features, "targets"))
 
+  def _normalize_body_output(self, body_out):
+    if isinstance(body_out, tuple):
+      output, losses = body_out
+      if not isinstance(losses, dict):
+        losses = {"extra": tf.reduce_mean(losses)}
+    else:
+      output = body_out
+      losses = {"extra": 0.0}
+
+    attention_loss = common_attention.encoder_decoder_attention_loss(
+          None,
+          self.attention_weights,
+          loss_type=self.hparams.expected_attention_loss_type,
+          loss_multiplier=self.hparams.expected_attention_loss_multiplier,
+          combine_all_layers=self.hparams.attention_loss_all_layers,
+          attention_loss_layer=self.hparams.attention_loss_layer)
+    losses['attention'] = 0.0 * attention_loss
+    return output, losses
+
+
+
   def _greedy_infer(self, features, decode_length):
     """Fast version of greedy decoding.
 
