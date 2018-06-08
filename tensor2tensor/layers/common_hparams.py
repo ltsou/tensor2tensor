@@ -217,9 +217,9 @@ def basic_params1():
       attention_loss_all_layers=False,
       # index (starting at 0) of layer to extract attn from if not averaging over all layers
       attention_loss_layer=0,
-      # attention loss types: mse, kl_divergence
-      expected_attention_loss_type="mse",
-      expected_attention_loss_multiplier=1.0,
+      # attention loss type: currently just mse
+      attention_loss_type="mse",
+      attention_loss_multiplier=1.0,
       # attention_argmax: true if taking argmax of attentions to get alignments
       attention_argmax=False,
       # attention_threshold: float between 0.0 and 1.0: attentions greater than this will be

@@ -392,8 +392,7 @@ def encoder_decoder_attention_loss(target_alignments=None,
     align_shape = common_layers.shape_list(hyp_aligns)
     ref_aligns_sparse = tf.scatter_nd(ref_positions_flat, ref_padding, align_shape)
     loss = loss_fn(ref_aligns_sparse, hyp_aligns)
-    p = tf.py_func(hacky_print, [hyp_aligns, loss], tf.int32)
-    return tf.reduce_sum(p)
+    return loss
 
   loss_fn = mse_loss # could add more loss functions here
   extracted_weights = combine_attentions(actual_attentions)
@@ -409,11 +408,7 @@ def encoder_decoder_attention_loss(target_alignments=None,
     loss = ref_attention_loss(target_alignments, one_zero_attns)
   else:
     loss = 0.0
-  return loss# * loss_multiplier
-
-def hacky_print(h, r):
-  tf.logging.info(r)
-  return np.int32(r)
+  return loss * loss_multiplier
 
 @expert_utils.add_name_scope()
 def get_timing_signal_1d(length,
