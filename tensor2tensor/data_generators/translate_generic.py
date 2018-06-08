@@ -12,6 +12,8 @@ from tensor2tensor.data_generators import generator_utils
 from tensor2tensor.data_generators import problem
 from tensor2tensor.data_generators import text_encoder
 from tensor2tensor.data_generators import translate
+
+
 from tensor2tensor.utils import registry
 
 import tensorflow as tf
@@ -222,12 +224,22 @@ class TranslateGenericExistingVocabAlignments(TranslateGenericExistingVocab):
   def align_name(self):
     return "align"
 
+  def example_reading_spec(self):
+    data_fields = {
+        "inputs": tf.VarLenFeature(tf.int64),
+        "targets": tf.VarLenFeature(tf.int64),
+        "alignments": tf.VarLenFeature(tf.int64),
+
+    }
+    return data_fields, None
+
+
   def feature_encoders(self, data_dir):
     source_vocab_filename = os.path.join(data_dir, self.source_vocab_name)
     target_vocab_filename = os.path.join(data_dir, self.target_vocab_name)
     source_encoder = text_encoder.TokenTextEncoder(source_vocab_filename, replace_oov="<unk>")
     target_encoder = text_encoder.TokenTextEncoder(target_vocab_filename, replace_oov="<unk>")
-    align_encoder = text_encoder.TextEncoder(num_reserved_ids=0)
+    align_encoder = text_encoder.AlignmentEncoder()
     return {"inputs": source_encoder, "targets": target_encoder, "alignments": align_encoder}
 
   def generator(self, data_dir, tmp_dir, train):
@@ -262,8 +274,28 @@ class TranslateGenericExistingVocabAlignments(TranslateGenericExistingVocab):
     else:
       return translate.bi_vocabs_token_generator(data_path + ".src", data_path + ".trg",
                                                  source_token_vocab, target_token_vocab, EOS)
+  '''
+  def preprocess_example(self, example, mode, hparams):
+    """Runtime preprocessing.
 
+    Return a dict or a tf.Data.Datset.from_tensor_slices (if you want each
+    example to turn into multiple).
 
+    Args:
+      example: dict, features
+      mode: tf.estimator.ModeKeys
+      hparams: HParams, model hyperparameters
+
+    Returns:
+      dict or Dataset
+    """
+    examples = problem.preprocess_example_common(example, hparams, mode)
+    alignment_shape = common_layers.shape_list(examples['alignments'])[0]
+    tf.logging.info(alignment_shape)
+    tf.logging.info(examples['alignments'])
+    examples['alignments'] = tf.reshape(examples['alignments'], [alignment_shape / 2, 2])
+    return examples
+  '''
 
 def bi_vocabs_with_alignment_token_generator(source_path,
                                              target_path,

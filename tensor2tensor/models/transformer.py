@@ -155,7 +155,7 @@ class Transformer(t2t_model.T2TModel):
 
     targets = features["targets"]
     targets = common_layers.flatten4d3d(targets)
-
+    self.alignments = features.get('alignments')
     decoder_input, decoder_self_attention_bias = transformer_prepare_decoder(
         targets, hparams, features=features)
 
@@ -174,13 +174,13 @@ class Transformer(t2t_model.T2TModel):
       losses = {"extra": 0.0}
 
     attention_loss = common_attention.encoder_decoder_attention_loss(
-          None,
+          self.alignments,
           self.attention_weights,
           loss_type=self.hparams.expected_attention_loss_type,
           loss_multiplier=self.hparams.expected_attention_loss_multiplier,
           combine_all_layers=self.hparams.attention_loss_all_layers,
           attention_loss_layer=self.hparams.attention_loss_layer)
-    losses['attention'] = 0.0 * attention_loss
+    losses['attention'] = 0.0 * tf.cast(attention_loss, tf.float32)
     return output, losses
 
 

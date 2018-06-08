@@ -318,7 +318,7 @@ def add_standard_attention_hparams(hparams):
 
 
 
-def encoder_decoder_attention_loss(expected_attention_logits=None,
+def encoder_decoder_attention_loss(target_alignments=None,
                                    actual_attentions=None,
                                    loss_type="mse",
                                    loss_multiplier=1.0,
@@ -326,8 +326,8 @@ def encoder_decoder_attention_loss(expected_attention_logits=None,
                                    attention_loss_layer=0):
   """Computes encdec attention loss between expected and actual attentions.
   Args:
-    expected_attention_logits: Tensor storing the expected encoder-decoder
-      attention logits with shape [batch_size, target_length, input_length].
+    target_alignments: Tensor storing the reference encoder-decoder alignments
+       with shape [batch_size, target_length, input_length].
     actual_attentions: Dictionary with actual attention logits for different
       attention types and hidden layers.
     loss_type: type of the loss function.
@@ -343,39 +343,64 @@ def encoder_decoder_attention_loss(expected_attention_logits=None,
     attentions = tf.stack(attention_list)
     # Reduce mean across all layers (axis=0) and all heads (axis=2) to get a
     # tensor with shape [batch_size, target_length, input_length].
+
+    #TODO - extracting layers bit here? 
+    # option to have soft (softmax) or hard (argmax, max over threshold) alignments.
     return tf.reduce_mean(attentions, [0, 2])
 
   def kl_divergence_loss(expected_logits, actual_logits):
+    # NB: currently expects logits, not sum-to-one distributions
     p = tf.contrib.distributions.Categorical(logits=expected_logits)
     q = tf.contrib.distributions.Categorical(logits=actual_logits)
     return tf.contrib.distributions.kl_divergence(p, q)
 
-  def mse_loss(expected_logits, actual_weights):
-    expected_weights = tf.nn.softmax(expected_logits)
+  def mse_loss(expected_weights, actual_weights):
+    #expected_weights = tf.nn.softmax(expected_logits) # not needed?
     return tf.losses.mean_squared_error(expected_weights, actual_weights)
+
+
+  def get_ref_positions_and_padding(reference_aligns):
+    # ref_positions: full matrix with 1s corresponding to reference alignment positions
+    # return 1s for the reference alignment positions, 0s otherwise
+    ref_shape = common_layers.shape_list(reference_aligns)
+    batch_size = ref_shape[0]
+    num_pos_pairs = tf.to_int32(ref_shape[1] / 2)
+    reference_alignments = tf.reshape(reference_aligns, [batch_size, num_pos_pairs, 2])
+    flat_length = batch_size * num_pos_pairs
+    batch_pos = tf.range(flat_length) // num_pos_pairs
+    batch_pos = tf.reshape(batch_pos, [batch_size, num_pos_pairs, 1])
+    batch_ref_positions = tf.concat([batch_pos, reference_alignments], axis=-1)
+
+    flat_pos = tf.to_int32(tf.reduce_sum(tf.reshape(reference_alignments, [flat_length, 2]),
+                             axis=1))
+    first_entries = tf.reshape(tf.one_hot(
+      tf.zeros([batch_size], dtype=tf.int32), num_pos_pairs, dtype=tf.int32),
+                               [flat_length])    
+    ref_padding = tf.to_int32(tf.not_equal(first_entries + flat_pos,
+                                           tf.zeros_like(first_entries)))
+    return batch_ref_positions, ref_padding
+
+
+  def ref_attention_loss(reference_aligns, hyp_aligns):
+    # apply penalty to all positions
+    ref_positions, ref_padding = get_ref_positions_and_padding(reference_aligns)
+    pos_shape = common_layers.shape_list(ref_positions)
+    ref_positions_flat = tf.reshape(ref_positions, [pos_shape[0] * pos_shape[1], 3])
+    align_shape = common_layers.shape_list(hyp_aligns)
+    ref_aligns_sparse = tf.scatter_nd(ref_positions_flat, ref_padding, align_shape)
+    loss = loss_fn(ref_aligns_sparse, hyp_aligns)
+    p = tf.py_func(hacky_print, [hyp_aligns, loss], tf.int32)
+    return tf.reduce_sum(p)
+
 
   # For each hidden layer, we have attention-logit and attention-weight tensors
   # with shape [batch_size, num_heads, target_length, input_length].
-  '''
-  loss = 0.0
-  if loss_type == "mse":
-    actual_encdec_attention_weights = [
-        t for layer_key, t in actual_attentions.items()
-        if "encdec_attention" in layer_key and not layer_key.endswith("/logits")
-    ]
-    actual_attention_weights = combine_attentions(
-        actual_encdec_attention_weights)
-    loss = mse_loss(expected_attention_logits, actual_attention_weights)
+  loss_fn = None
+  if loss_type == "kl_divergence":
+    loss_fn = kl_divergence_loss
   else:
-    actual_encdec_attention_logits = [
-        t for layer_key, t in actual_attentions.items()
-        if "encdec_attention" in layer_key and layer_key.endswith("/logits")
-    ]
-    actual_attention_logits = combine_attentions(actual_encdec_attention_logits)
-    loss = kl_divergence_loss(expected_attention_logits,
-                              actual_attention_logits)
-  return loss * loss_multiplier
-  '''
+    loss_fn = mse_loss
+  
   if combine_all_layers:
     tf.logging.info('Averaging extracted attentions over all layers')
     actual_encdec_attention_weights = [
@@ -383,19 +408,22 @@ def encoder_decoder_attention_loss(expected_attention_logits=None,
       if "encdec_attention" in layer_key]
   else:
     tf.logging.info('Extracting attentions from layer {}'.format(attention_loss_layer))
-    # a bit of a hack, only works for <=10 layers
     actual_encdec_attention_weights = [
       t for layer_key, t in actual_attentions.items() 
       if "encdec_attention" in layer_key and 
-      layer_key.split("layer_")[1].startswith(str(attention_loss_layer))]
+      layer_key.split("layer_")[1].split('/')[0] == str(attention_loss_layer)]
+
   extracted_weights = combine_attentions(actual_encdec_attention_weights)
   # extracted_weights [batch_size, target_length, input_length]
-  p = tf.py_func(hacky_print, [extracted_weights], tf.float32)
-  return tf.reduce_sum(p)
+  if target_alignments is not None:
+    loss = ref_attention_loss(target_alignments, extracted_weights)
+  else:
+    loss = tf.reduce_sum(extracted_weights) # l1 norm on attentions
+  return loss# * loss_multiplier
 
-def hacky_print(t):
-  tf.logging.info(t)
-  return t
+def hacky_print(h, r):
+  tf.logging.info(r)
+  return np.int32(r)
 
 @expert_utils.add_name_scope()
 def get_timing_signal_1d(length,

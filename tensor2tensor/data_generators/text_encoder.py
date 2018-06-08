@@ -910,3 +910,56 @@ class ImageEncoder(object):
   @property
   def vocab_size(self):
     return 256
+
+
+
+class AlignmentEncoder(TextEncoder):
+  def encode(self, s):
+    """Transform a human-readable string consisting of pairs of sentence positions 
+    into a sequence of pairs of int ids.
+
+    EOS is not appended.
+
+    Args:
+      s: human-readable string to be converted.
+
+    Returns:
+      ids: list of integers
+    """
+    split_str = s.split()
+    pairs = []
+    for i in range(0, len(split_str), 2):
+      pairs.append(map(int, [split_str[i], split_str[i+1]]))
+    return pairs
+
+  def decode(self, ids):
+    """Transform a sequence of pairs of int ids into a human-readable string.
+
+    EOS is not expected in ids.
+
+    Args:
+      ids: list of integers to be converted.
+
+    Returns:
+      s: human-readable string.
+    """
+    return " ".join(self.decode_list(ids))
+
+  def decode_list(self, ids):
+    """Transform a sequence of int position pairs into flat string versions.
+
+    This method supports transforming individual input/output ids to their
+    string versions so that sequence to/from text conversions can be visualized
+    in a human readable format.
+
+    Args:
+      ids: list of integers to be converted.
+
+    Returns:
+      strs: list of human-readable string.
+    """
+    decoded_ids = []
+    for pos_pair in ids:
+      decoded_ids.extend(pos_pair)
+    return [str(d) for d in decoded_ids]
+
