@@ -173,11 +173,16 @@ class Transformer(t2t_model.T2TModel):
       output = body_out
       losses = {"extra": 0.0}
 
+    attention_threshold = None
+    if not self.hparams.attention_argmax:
+      attention_threshold = self.hparams.attention_threshold
+      
     attention_loss = common_attention.encoder_decoder_attention_loss(
           self.alignments,
           self.attention_weights,
           loss_type=self.hparams.expected_attention_loss_type,
           loss_multiplier=self.hparams.expected_attention_loss_multiplier,
+          attention_cutoff=attention_threshold,
           combine_all_layers=self.hparams.attention_loss_all_layers,
           attention_loss_layer=self.hparams.attention_loss_layer)
     losses['attention'] = 0.0 * tf.cast(attention_loss, tf.float32)

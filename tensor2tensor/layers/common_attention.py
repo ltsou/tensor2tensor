@@ -322,6 +322,7 @@ def encoder_decoder_attention_loss(target_alignments=None,
                                    actual_attentions=None,
                                    loss_type="mse",
                                    loss_multiplier=1.0,
+                                   attention_cutoff=None,
                                    combine_all_layers=False,
                                    attention_loss_layer=0):
   """Computes encdec attention loss between expected and actual attentions.
@@ -330,33 +331,35 @@ def encoder_decoder_attention_loss(target_alignments=None,
        with shape [batch_size, target_length, input_length].
     actual_attentions: Dictionary with actual attention logits for different
       attention types and hidden layers.
-    loss_type: type of the loss function.
+    loss_type: type of the loss function: "mse"
     loss_multiplier: multiplier for the attention loss.
+    attention_cutoff (float): If None, take the argmax of attentions. 
+                               Otherwise, float 0.0-1.0 specifying threshold for attentions
+    combine_all_layers: True if averaging model attentions across all layers
+    attention_loss_layer: if combine_all_layers=False, specifies the layer to supervise
   Returns:
     Loss of specified type between the actual and expected attention logits.
   """
 
-  def combine_attentions(attention_list):
+  def combine_attentions(actual_attentions):
     """Combine different layer attentions and then average over layers/heads."""
-    # Stack all hidden layer attention tensors to get a tensor with shape
-    # [num_hidden_layers, batch_size, num_heads, target_length, input_length].
+    if combine_all_layers:
+      tf.logging.info('Averaging extracted attentions over all layers')
+      attention_list = [t for layer_key, t in actual_attentions.items()
+                        if "encdec_attention" in layer_key]
+    else:
+      tf.logging.info('Extracting attentions from layer {}'.format(attention_loss_layer))
+      attention_list = [t for layer_key, t in actual_attentions.items() 
+                        if "encdec_attention" in layer_key and 
+                        layer_key.split("layer_")[1].split('/')[0] == str(attention_loss_layer)]
+    # [num_hidden_layers, batch_size, num_heads, target_length, input_length]
     attentions = tf.stack(attention_list)
-    # Reduce mean across all layers (axis=0) and all heads (axis=2) to get a
-    # tensor with shape [batch_size, target_length, input_length].
-
-    #TODO - extracting layers bit here? 
-    # option to have soft (softmax) or hard (argmax, max over threshold) alignments.
+    # [batch_size, target_length, input_length]
     return tf.reduce_mean(attentions, [0, 2])
 
-  def kl_divergence_loss(expected_logits, actual_logits):
-    # NB: currently expects logits, not sum-to-one distributions
-    p = tf.contrib.distributions.Categorical(logits=expected_logits)
-    q = tf.contrib.distributions.Categorical(logits=actual_logits)
-    return tf.contrib.distributions.kl_divergence(p, q)
-
-  def mse_loss(expected_weights, actual_weights):
+  def mse_loss(labels, attention_weights):
     #expected_weights = tf.nn.softmax(expected_logits) # not needed?
-    return tf.losses.mean_squared_error(expected_weights, actual_weights)
+    return tf.losses.mean_squared_error(labels, attention_weights)
 
 
   def get_ref_positions_and_padding(reference_aligns):
@@ -392,33 +395,20 @@ def encoder_decoder_attention_loss(target_alignments=None,
     p = tf.py_func(hacky_print, [hyp_aligns, loss], tf.int32)
     return tf.reduce_sum(p)
 
-
-  # For each hidden layer, we have attention-logit and attention-weight tensors
-  # with shape [batch_size, num_heads, target_length, input_length].
-  loss_fn = None
-  if loss_type == "kl_divergence":
-    loss_fn = kl_divergence_loss
-  else:
-    loss_fn = mse_loss
-  
-  if combine_all_layers:
-    tf.logging.info('Averaging extracted attentions over all layers')
-    actual_encdec_attention_weights = [
-      t for layer_key, t in actual_attentions.items()
-      if "encdec_attention" in layer_key]
-  else:
-    tf.logging.info('Extracting attentions from layer {}'.format(attention_loss_layer))
-    actual_encdec_attention_weights = [
-      t for layer_key, t in actual_attentions.items() 
-      if "encdec_attention" in layer_key and 
-      layer_key.split("layer_")[1].split('/')[0] == str(attention_loss_layer)]
-
-  extracted_weights = combine_attentions(actual_encdec_attention_weights)
+  loss_fn = mse_loss # could add more loss functions here
+  extracted_weights = combine_attentions(actual_attentions)
   # extracted_weights [batch_size, target_length, input_length]
-  if target_alignments is not None:
-    loss = ref_attention_loss(target_alignments, extracted_weights)
+  if attention_cutoff is None:
+    input_length = common_layers.shape_list(extracted_weights)[2]
+    one_zero_attns = tf.one_hot(tf.argmax(extracted_weights, axis=-1, output_type=tf.int32),
+                                input_length)
   else:
-    loss = tf.reduce_sum(extracted_weights) # l1 norm on attentions
+    one_zero_attns = tf.to_int32(tf.greater(extracted_weights,
+                                            attention_cutoff * tf.ones_like(extracted_weights)))
+  if target_alignments is not None:
+    loss = ref_attention_loss(target_alignments, one_zero_attns)
+  else:
+    loss = 0.0
   return loss# * loss_multiplier
 
 def hacky_print(h, r):
