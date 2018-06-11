@@ -182,6 +182,7 @@ class Transformer(t2t_model.T2TModel):
           self.attention_weights,
           loss_type=self.hparams.attention_loss_type,
           loss_multiplier=self.hparams.attention_loss_multiplier,
+          threshold_len_multiplier=self.hparams.attention_length_threshold_multiplier,
           attention_cutoff=attention_threshold,
           combine_all_layers=self.hparams.attention_loss_all_layers,
           attention_loss_layer=self.hparams.attention_loss_layer)

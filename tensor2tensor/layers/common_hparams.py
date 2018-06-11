@@ -222,7 +222,9 @@ def basic_params1():
       attention_loss_multiplier=1.0,
       # attention_argmax: true if taking argmax of attentions to get alignments
       attention_argmax=False,
-      # attention_threshold: float between 0.0 and 1.0: attentions greater than this will be
+      # attention_length_threshold_multiplier: if >0, this 
+      attention_length_threshold_multiplier=0.0,
+      # attention_threshold: float: attentions greater than this will be
       # treated as alignment links. ignored if attention_argmax=True
       attention_threshold=0.0,
   )

@@ -322,13 +322,14 @@ def encoder_decoder_attention_loss(target_alignments=None,
                                    actual_attentions=None,
                                    loss_type="mse",
                                    loss_multiplier=1.0,
+                                   threshold_len_multiplier=0.0,
                                    attention_cutoff=None,
                                    combine_all_layers=False,
                                    attention_loss_layer=0):
   """Computes encdec attention loss between expected and actual attentions.
   Args:
     target_alignments: Tensor storing the reference encoder-decoder alignments
-       with shape [batch_size, target_length, input_length].
+       with shape [batch_size, target_length, source_length].
     actual_attentions: Dictionary with actual attention logits for different
       attention types and hidden layers.
     loss_type: type of the loss function: "mse"
@@ -352,9 +353,9 @@ def encoder_decoder_attention_loss(target_alignments=None,
       attention_list = [t for layer_key, t in actual_attentions.items() 
                         if "encdec_attention" in layer_key and 
                         layer_key.split("layer_")[1].split('/')[0] == str(attention_loss_layer)]
-    # [num_hidden_layers, batch_size, num_heads, target_length, input_length]
+    # [num_hidden_layers, batch_size, num_heads, target_length, source_length]
     attentions = tf.stack(attention_list)
-    # [batch_size, target_length, input_length]
+    # [batch_size, target_length, source_length]
     return tf.reduce_mean(attentions, [0, 2])
 
   def mse_loss(labels, attention_weights):
@@ -362,52 +363,52 @@ def encoder_decoder_attention_loss(target_alignments=None,
     return tf.losses.mean_squared_error(labels, attention_weights)
 
 
-  def get_ref_positions_and_padding(reference_aligns):
-    # ref_positions: full matrix with 1s corresponding to reference alignment positions
+  def get_ref_positions_and_padding(ref_aligns):
     # return 1s for the reference alignment positions, 0s otherwise
-    ref_shape = common_layers.shape_list(reference_aligns)
-    batch_size = ref_shape[0]
-    num_pos_pairs = tf.to_int32(ref_shape[1] / 2)
-    reference_alignments = tf.reshape(reference_aligns, [batch_size, num_pos_pairs, 2])
-    flat_length = batch_size * num_pos_pairs
-    batch_pos = tf.range(flat_length) // num_pos_pairs
-    batch_pos = tf.reshape(batch_pos, [batch_size, num_pos_pairs, 1])
-    batch_ref_positions = tf.concat([batch_pos, reference_alignments], axis=-1)
-
-    flat_pos = tf.to_int32(tf.reduce_sum(tf.reshape(reference_alignments, [flat_length, 2]),
-                             axis=1))
-    first_entries = tf.reshape(tf.one_hot(
-      tf.zeros([batch_size], dtype=tf.int32), num_pos_pairs, dtype=tf.int32),
-                               [flat_length])    
-    ref_padding = tf.to_int32(tf.not_equal(first_entries + flat_pos,
-                                           tf.zeros_like(first_entries)))
+    batch_size, align_size = common_layers.shape_list(ref_aligns)
+    align_count = tf.to_int32(align_size / 2)
+    ref_aligns = tf.reshape(ref_aligns, [batch_size, align_count, 2])
+    flat_length = batch_size * align_count
+    batch_pos = tf.range(flat_length) // align_count
+    batch_pos = tf.reshape(batch_pos, [batch_size, align_count, 1])
+    batch_ref_positions = tf.concat([batch_pos, ref_aligns], axis=-1)
+    flat_pos = tf.to_int32(tf.reduce_sum(tf.reshape(ref_aligns, [flat_length, 2]), axis=1))
+    first_pos = tf.one_hot(tf.zeros([batch_size], dtype=tf.int32), align_count, dtype=tf.int32)
+    first_pos = tf.reshape(first_pos, [flat_length])    
+    ref_padding = tf.to_int32(tf.not_equal(first_pos + flat_pos, tf.zeros_like(first_pos)))
     return batch_ref_positions, ref_padding
 
 
-  def ref_attention_loss(reference_aligns, hyp_aligns):
-    # apply penalty to all positions
+  def get_hard_attention(soft_attn, ref_lengths):
+    if threshold_len_multiplier > 0.0:
+      batch_size = common_layers.shape_list(soft_attn)[0]
+      ref_lengths = tf.reduce_sum(tf.reshape(ref_lengths, [batch_size, -1]), axis=-1)
+      ref_lengths = tf.cast(tf.reshape(ref_lengths, [batch_size, 1, 1]), tf.float32)
+      length_thresholds = threshold_len_multiplier / ref_lengths
+      hard_attn = tf.greater(soft_attn, length_thresholds * tf.ones_like(soft_attn))
+    elif attention_cutoff is None:
+      src_len = common_layers.shape_list(soft_attn)[2]
+      hard_attn = tf.one_hot(tf.argmax(soft_attn, axis=-1), src_len)
+    else:
+      tf.logging.info('Applying threshold to attention weights')
+      hard_attn = tf.greater(soft_attn, attention_cutoff * tf.ones_like(soft_attn))
+    return tf.to_int32(hard_attn)
+
+  def ref_attention_loss(reference_aligns, soft_attention):
     ref_positions, ref_padding = get_ref_positions_and_padding(reference_aligns)
     pos_shape = common_layers.shape_list(ref_positions)
     ref_positions_flat = tf.reshape(ref_positions, [pos_shape[0] * pos_shape[1], 3])
-    align_shape = common_layers.shape_list(hyp_aligns)
+    hard_attention = get_hard_attention(soft_attention, ref_padding)
+    align_shape = common_layers.shape_list(hard_attention)
     ref_aligns_sparse = tf.scatter_nd(ref_positions_flat, ref_padding, align_shape)
-    loss = loss_fn(ref_aligns_sparse, hyp_aligns)
+    loss = loss_fn(ref_aligns_sparse, hard_attention)
     return loss
 
+  if target_alignments is None:
+    return 0.0
   loss_fn = mse_loss # could add more loss functions here
-  extracted_weights = combine_attentions(actual_attentions)
-  # extracted_weights [batch_size, target_length, input_length]
-  if attention_cutoff is None:
-    input_length = common_layers.shape_list(extracted_weights)[2]
-    one_zero_attns = tf.one_hot(tf.argmax(extracted_weights, axis=-1, output_type=tf.int32),
-                                input_length)
-  else:
-    one_zero_attns = tf.to_int32(tf.greater(extracted_weights,
-                                            attention_cutoff * tf.ones_like(extracted_weights)))
-  if target_alignments is not None:
-    loss = ref_attention_loss(target_alignments, one_zero_attns)
-  else:
-    loss = 0.0
+  soft_attentions = combine_attentions(actual_attentions)
+  loss = ref_attention_loss(target_alignments, soft_attentions)
   return loss * loss_multiplier
 
 @expert_utils.add_name_scope()
