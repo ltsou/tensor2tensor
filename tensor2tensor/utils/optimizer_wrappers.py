@@ -97,6 +97,7 @@ class EWCOptimizer(ConditionalOptimizer):
     self.save_ewc_step = None
     self.fisher_accum_steps = None
     self.set_steps(hparams)
+    self.cond_name = 'ewc_cond'
 
   def set_steps(self, hparams):
     if self.save_vars:
@@ -118,14 +119,14 @@ class EWCOptimizer(ConditionalOptimizer):
     return control_flow_ops.group(*ewc_ops)
       
 
-
   def apply_gradients(self, grads_and_vars, global_step=None, name=None):
     if self.save_vars:
       maybe_accumulate_fisher = tf.cond(tf.greater_equal(global_step, self.save_ewc_step),
                                         lambda: self.accumulate_fisher_and_lagged(
                                           grads_and_vars, global_step=global_step, name=name),
                                         lambda: self._opt.apply_gradients(
-                                          grads_and_vars, global_step=global_step, name=name))
+                                          grads_and_vars, global_step=global_step, name=name),
+                                        name=self.cond_name)
       return maybe_accumulate_fisher
     else:
       return self._opt.apply_gradients(grads_and_vars, global_step=global_step, name=name)
@@ -177,7 +178,10 @@ class EWCOptimizer(ConditionalOptimizer):
     restore_vars = []
     for v in global_vars:
       if v not in new_vars_set:
-        restore_vars.append(v)
+        if self.cond_name not in v.name:
+          restore_vars.append(v)
+        else:
+          new_vars.append(v)
     return tf.train.Saver(restore_vars)
       
 
