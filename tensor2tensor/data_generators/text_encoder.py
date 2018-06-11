@@ -914,6 +914,9 @@ class ImageEncoder(object):
 
 
 class AlignmentEncoder(TextEncoder):
+  def __init__(self, src_trg_order=True):
+    self.src_trg_order = src_trg_order
+
   def encode(self, s):
     """Transform a human-readable string consisting of pairs of sentence positions 
     into a sequence of pairs of int ids.
@@ -929,7 +932,10 @@ class AlignmentEncoder(TextEncoder):
     split_str = s.split()
     pairs = []
     for i in range(0, len(split_str), 2):
-      pairs.append(map(int, [split_str[i], split_str[i+1]]))
+      if self.src_trg_order:
+        pairs.extend(map(int, [split_str[i+1], split_str[i]]))
+      else:
+        pairs.extend(map(int, [split_str[i], split_str[i+1]]))
     return pairs
 
   def decode(self, ids):

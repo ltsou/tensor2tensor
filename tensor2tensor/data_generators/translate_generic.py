@@ -224,6 +224,11 @@ class TranslateGenericExistingVocabAlignments(TranslateGenericExistingVocab):
   def align_name(self):
     return "align"
 
+  @property
+  def src_trg_order(self):
+    # defines whether input alignments are in order [src_pos trg_pos]
+    return True
+    
   def example_reading_spec(self):
     data_fields = {
         "inputs": tf.VarLenFeature(tf.int64),
@@ -231,7 +236,7 @@ class TranslateGenericExistingVocabAlignments(TranslateGenericExistingVocab):
         "alignments": tf.VarLenFeature(tf.int64),
 
     }
-    return data_fields, None
+    return data_fields, None    
 
 
   def feature_encoders(self, data_dir):
@@ -239,7 +244,7 @@ class TranslateGenericExistingVocabAlignments(TranslateGenericExistingVocab):
     target_vocab_filename = os.path.join(data_dir, self.target_vocab_name)
     source_encoder = text_encoder.TokenTextEncoder(source_vocab_filename, replace_oov="<unk>")
     target_encoder = text_encoder.TokenTextEncoder(target_vocab_filename, replace_oov="<unk>")
-    align_encoder = text_encoder.AlignmentEncoder()
+    align_encoder = text_encoder.AlignmentEncoder(src_trg_order=self.src_trg_order)
     return {"inputs": source_encoder, "targets": target_encoder, "alignments": align_encoder}
 
   def generator(self, data_dir, tmp_dir, train):
@@ -263,7 +268,7 @@ class TranslateGenericExistingVocabAlignments(TranslateGenericExistingVocab):
     tag = "train" if train else "dev"
     data_path = _compile_data(tmp_dir, datasets, "generic_tok_%s" % tag)
     if train:
-      alignment_encoder = text_encoder.TextEncoder(num_reserved_ids=0)
+      alignment_encoder = text_encoder.AlignmentEncoder(src_trg_order=self.src_trg_order)
       return bi_vocabs_with_alignment_token_generator(data_path + ".src", data_path + ".trg",
                                                       alignment_path,
                                                       source_token_vocab,
