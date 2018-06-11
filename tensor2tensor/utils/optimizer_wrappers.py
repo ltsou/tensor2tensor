@@ -94,8 +94,8 @@ class EWCOptimizer(ConditionalOptimizer):
     self.fisher_set = hparams.ewc_fisher_collect
 
     self.final_step = hparams.train_steps
-    self.save_ewc_step = None
-    self.fisher_accum_steps = None
+    self.save_ewc_step = 0
+    self.fisher_accum_steps = 1
     self.set_steps(hparams)
     self.cond_name = 'ewc_cond'
 
@@ -120,16 +120,15 @@ class EWCOptimizer(ConditionalOptimizer):
       
 
   def apply_gradients(self, grads_and_vars, global_step=None, name=None):
-    if self.save_vars:
-      maybe_accumulate_fisher = tf.cond(tf.greater_equal(global_step, self.save_ewc_step),
+      maybe_accumulate_fisher = tf.cond(tf.logical_and(
+        tf.constant(self.save_vars, dtype=tf.bool),
+        tf.greater_equal(global_step, self.save_ewc_step)),
                                         lambda: self.accumulate_fisher_and_lagged(
                                           grads_and_vars, global_step=global_step, name=name),
                                         lambda: self._opt.apply_gradients(
                                           grads_and_vars, global_step=global_step, name=name),
                                         name=self.cond_name)
       return maybe_accumulate_fisher
-    else:
-      return self._opt.apply_gradients(grads_and_vars, global_step=global_step, name=name)
 
   def compute_gradients(self, loss, var_list=None, **kwargs):
     tf.logging.info('Creating lagged variables for EWC loss')
@@ -178,7 +177,7 @@ class EWCOptimizer(ConditionalOptimizer):
     restore_vars = []
     for v in global_vars:
       if v not in new_vars_set:
-        if self.cond_name not in v.name:
+        if self.cond_name not in v.name: # resets Adam-specific beta_power variables
           restore_vars.append(v)
         else:
           new_vars.append(v)
