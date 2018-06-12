@@ -17,8 +17,10 @@ from tensor2tensor.data_generators import translate
 from tensor2tensor.utils import registry
 
 import tensorflow as tf
+tf.flags.DEFINE_bool("align_src_trg_order", True, "True if input alignments are src_pos1 trg_pos1 src_pos2 trg_pos2 [...]")
 
 FLAGS = tf.flags.FLAGS
+
 
 
 # End-of-sentence marker.
@@ -227,7 +229,7 @@ class TranslateGenericExistingVocabAlignments(TranslateGenericExistingVocab):
   @property
   def src_trg_order(self):
     # defines whether input alignments are in order [src_pos trg_pos]
-    return True
+    return FLAGS.align_src_trg_order
     
   def example_reading_spec(self):
     data_fields = {
@@ -279,28 +281,7 @@ class TranslateGenericExistingVocabAlignments(TranslateGenericExistingVocab):
     else:
       return translate.bi_vocabs_token_generator(data_path + ".src", data_path + ".trg",
                                                  source_token_vocab, target_token_vocab, EOS)
-  '''
-  def preprocess_example(self, example, mode, hparams):
-    """Runtime preprocessing.
 
-    Return a dict or a tf.Data.Datset.from_tensor_slices (if you want each
-    example to turn into multiple).
-
-    Args:
-      example: dict, features
-      mode: tf.estimator.ModeKeys
-      hparams: HParams, model hyperparameters
-
-    Returns:
-      dict or Dataset
-    """
-    examples = problem.preprocess_example_common(example, hparams, mode)
-    alignment_shape = common_layers.shape_list(examples['alignments'])[0]
-    tf.logging.info(alignment_shape)
-    tf.logging.info(examples['alignments'])
-    examples['alignments'] = tf.reshape(examples['alignments'], [alignment_shape / 2, 2])
-    return examples
-  '''
 
 def bi_vocabs_with_alignment_token_generator(source_path,
                                              target_path,
