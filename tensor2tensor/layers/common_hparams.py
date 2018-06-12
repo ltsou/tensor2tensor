@@ -213,6 +213,7 @@ def basic_params1():
       force_full_predict=False,
       # Set this for pure model parallelism.  There is only one data shard.
       no_data_parallelism=False,
+      log_all_training_losses=False,
   )
 
 

@@ -857,6 +857,13 @@ class T2TModel(base.Layer):
     # Accumulate losses
     loss = sum(losses_dict.values())
 
+    train_loss_logger = None
+    if hparams.log_all_training_losses:
+      tf.logging.info('Adding the following loss subsets to training hooks: {}'.format(
+        losses_dict.keys()))
+      train_loss_logger
+
+
     # EVAL mode
     if mode == tf.estimator.ModeKeys.EVAL:
       return model.estimator_spec_eval(features, logits, labels, loss)
