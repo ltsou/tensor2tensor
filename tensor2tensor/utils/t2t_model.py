@@ -44,6 +44,8 @@ from tensorflow.python.eager import context
 from tensorflow.python.layers import base
 from tensorflow.python.ops import variable_scope
 
+FLAGS = tf.flags.FLAGS
+
 _no_problem_err_str = (
     "The default implementation of %s requires that the "
     "model be used with a Problem. If using a Problem, augment the "
@@ -857,6 +859,14 @@ class T2TModel(base.Layer):
     # Accumulate losses
     loss = sum(losses_dict.values())
 
+    train_loss_logger = None
+    if hparams.log_all_training_losses:
+      tf.logging.info('Adding the following loss subsets to training hooks: {}'.format(
+        losses_dict.keys()))
+      train_loss_logger = tf.train.LoggingTensorHook(losses_dict,
+                                                     every_n_iter=FLAGS.log_step_count_steps)
+
+
     # EVAL mode
     if mode == tf.estimator.ModeKeys.EVAL:
       return model.estimator_spec_eval(features, logits, labels, loss)
@@ -866,19 +876,23 @@ class T2TModel(base.Layer):
     num_async_replicas = (1 if (use_tpu or not config) else
                           config.t2t_device_info["num_async_replicas"])
     return model.estimator_spec_train(
-        loss, num_async_replicas=num_async_replicas)
+        loss, num_async_replicas=num_async_replicas, logger=train_loss_logger)
 
-  def estimator_spec_train(self, loss, num_async_replicas=1):
+  def estimator_spec_train(self, loss, num_async_replicas=1, logger=None):
     """Construct EstimatorSpec for TRAIN mode."""
     train_op = self.optimize(loss, num_async_replicas=num_async_replicas)
-
+    training_hooks = None
+    if logger is not None:
+      training_hooks = [logger]
+    
     if common_layers.is_on_tpu():
       _remove_summaries()  # summaries not currently working on TPU
       return tf.contrib.tpu.TPUEstimatorSpec(
           tf.estimator.ModeKeys.TRAIN, loss=loss, train_op=train_op)
     else:
       return tf.estimator.EstimatorSpec(
-          tf.estimator.ModeKeys.TRAIN, loss=loss, train_op=train_op)
+          tf.estimator.ModeKeys.TRAIN, loss=loss, train_op=train_op,
+        training_hooks=training_hooks)
 
   def estimator_spec_eval(self, features, logits, labels, loss):
     """Construct EstimatorSpec for EVAL mode."""
