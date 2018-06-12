@@ -221,10 +221,12 @@ def basic_params1():
       # attention loss type: currently just mse
       attention_loss_type="mse",
       attention_loss_multiplier=1.0,
-      # attention_argmax: true if taking argmax of attentions to get alignments
+      # attention_length_threshold_multiplier: if >0, this factor/num of ref alignment positions
+      # gives the attention threshold per sentence pair in batch
+      attention_length_threshold_multiplier=1.0,
+      # attention_argmax: true if taking argmax of attentions to get alignments.
+      # ignored if attention_length_threshold_multiplier>0 
       attention_argmax=False,
-      # attention_length_threshold_multiplier: if >0, this 
-      attention_length_threshold_multiplier=0.0,
       # attention_threshold: float: attentions greater than this will be
       # treated as alignment links. ignored if attention_argmax=True
       attention_threshold=0.0,
