@@ -150,7 +150,8 @@ def create_run_config(hp):
       worker_id=FLAGS.worker_id,
       worker_job=FLAGS.worker_job,
       random_seed=FLAGS.random_seed,
-      tpu_infeed_sleep_secs=FLAGS.tpu_infeed_sleep_secs)
+      tpu_infeed_sleep_secs=FLAGS.tpu_infeed_sleep_secs,
+      log_step_count_steps=FLAGS.log_step_count_steps,)
 
 
 def generate_data():
