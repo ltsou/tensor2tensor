@@ -162,7 +162,7 @@ class EWCOptimizer(ConditionalOptimizer):
     if not reader.has_tensor(sample_var_name):
       tf.logging.info('{} not found: adding EWC vars to checkpoint file'.format(
         new_vars[0].name))
-      restorer = self.get_old_restorer(new_vars)
+      restorer = self.get_old_restorer(do_not_restore=new_vars)
       saver = tf.train.Saver()
       with tf.Session() as s:
         s.run(tf.variables_initializer(new_vars))
@@ -171,16 +171,17 @@ class EWCOptimizer(ConditionalOptimizer):
         saver.save(s, ewc_checkpoint)
 
 
-  def get_old_restorer(self, new_vars):
+  def get_old_restorer(self, do_not_restore):
+    # restore variables from previous checkpoint that are NOT related to EWC
     global_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
-    new_vars_set = set(new_vars)
+    restore_ignore_set = set(do_not_restore)
     restore_vars = []
     for v in global_vars:
-      if v not in new_vars_set:
+      if v not in restore_ignore_set:
         if self.cond_name not in v.name: # resets Adam-specific beta_power variables
           restore_vars.append(v)
         else:
-          new_vars.append(v)
+          do_not_restore.append(v)
     return tf.train.Saver(restore_vars)
       
 

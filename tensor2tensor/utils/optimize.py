@@ -73,7 +73,7 @@ def optimize(loss, learning_rate, hparams, use_tpu=False):
       summaries=opt_summaries,
       colocate_gradients_with_ops=True)
 
-  if hparams.ewc_save_vars or hparams.ewc_load_vars:
+  if hparams.ewc_save_vars:
     opt.check_checkpoint_vars()
   return train_op
 
