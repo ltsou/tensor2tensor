@@ -104,7 +104,8 @@ def create_run_config(master="",
                       random_seed=None,
                       sync=False,
                       tpu_infeed_sleep_secs=None,
-                      use_tpu=False):
+                      use_tpu=False,
+                      log_step_count_steps=100):
   """Create RunConfig, TPUConfig, and Parallelism object."""
   session_config = create_session_config(
       log_device_placement=log_device_placement,
@@ -115,7 +116,7 @@ def create_run_config(master="",
       "master": master,
       "model_dir": model_dir,
       "session_config": session_config,
-      "save_summary_steps": 100,
+      "save_summary_steps": log_step_count_steps,
       "save_checkpoints_steps": save_checkpoints_steps,
       "keep_checkpoint_max": keep_checkpoint_max,
       "keep_checkpoint_every_n_hours": keep_checkpoint_every_n_hours,

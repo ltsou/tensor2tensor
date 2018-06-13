@@ -21,7 +21,7 @@ RAW_DATA_DIR=${2:-/home/centos/data}
 TRAIN_STEPS=${3:-250000} # Default 250000
 PROBLEM=${4:-translate_generic} # or translate_generic_existing_vocab
 MODEL=${5:-transformer}
-HPARAMS=${6:-transformer_base_single_gpu}
+HPARAMS_SET=${6:-transformer_base_single_gpu}
 
 SOURCE="${BASH_SOURCE[0]}"
 while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symlink
@@ -82,12 +82,12 @@ else
     logMessage "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 fi
 
-if [[ $HPARAMS = transformer_base* || $HPARAMS = transformer_big* ]]; then
-    if [[ $ngpu -eq 1 && $HPARAMS != *_single_gpu ]]; then
-        HPARAMS=${HPARAMS}_single_gpu
+if [[ $HPARAMS_SET = transformer_base* || $HPARAMS_SET = transformer_big* ]]; then
+    if [[ $ngpu -eq 1 && $HPARAMS_SET != *_single_gpu ]]; then
+        HPARAMS_SET=${HPARAMS_SET}_single_gpu
     elif [[ $ngpu -gt 1 ]]; then
-        if [[ $HPARAMS == *_single_gpu ]]; then
-            HPARAMS=${HPARAMS%"_single_gpu"}
+        if [[ $HPARAMS_SET == *_single_gpu ]]; then
+            HPARAMS_SET=${HPARAMS_SET%"_single_gpu"}
         fi
     fi
 fi
@@ -140,7 +140,7 @@ else
       --data_dir=$DATA_DIR
       --problems=$PROBLEM
       --model=$MODEL
-      --hparams_set=$HPARAMS
+      --hparams_set=$HPARAMS_SET
       --worker_gpu=$ngpu
       --output_dir=$TRAIN_DIR
       --keep_checkpoint_max=$NUM_CKPT $TRAINER_FLAGS"
@@ -210,7 +210,7 @@ if [[ -f $DECODE_FILE ]]; then
           --data_dir=$DATA_DIR
           --problems=$PROBLEM
           --model=$MODEL
-          --hparams_set=$HPARAMS
+          --hparams_set=$HPARAMS_SET
           --output_dir=$OUTPUT_DIR
           --decode_beam_size=$BEAM_SIZE
           --decode_alpha=$ALPHA

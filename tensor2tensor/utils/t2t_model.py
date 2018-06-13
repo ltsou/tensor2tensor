@@ -46,6 +46,8 @@ from tensorflow.python.eager import context
 from tensorflow.python.layers import base
 from tensorflow.python.ops import variable_scope
 
+FLAGS = tf.flags.FLAGS
+
 _no_problem_err_str = (
     "The default implementation of %s requires that the "
     "model be used with a Problem. If using a Problem, augment the "
@@ -424,25 +426,12 @@ class T2TModel(base.Layer):
     flat_samples = tf.expand_dims(tf.expand_dims(flat_samples, -1), -1)
     features['targets'] = flat_samples
     logits, losses = self.model_fn(features) # shape [batch_size * sample_num]
-    orig_loss_num, orig_loss_den = orig_losses['training']
-    new_loss_num, new_loss_den = losses['training']
-    scaled_orig_loss = orig_loss_num * new_loss_den
-    scaled_new_loss = new_loss_num * orig_loss_den
-    scaled_den = orig_loss_den * new_loss_den
-    # the following is a hacky but simple way to print tensors during training...
-    a = 0.0
-    if self.hparams.mrt_log_split_loss:
-      a = tf.py_func(self.training_print, [scaled_orig_loss, scaled_new_loss, scaled_den],
-                     tf.float32)
-      a = tf.reduce_sum(a)
-      losses['training'] = (new_loss_num + 0.0*a, new_loss_den)
     if self.hparams.mrt_add_ref_xentropy:
-      losses['training'] = (scaled_new_loss + scaled_orig_loss + 0.0*a, scaled_den)
+      orig_loss = orig_losses['training']
+      new_loss = losses['training']
+      losses['training'] = orig_loss
+      losses['mrt'] = new_loss
     return logits, losses
-    
-  def training_print(self, original, new, den):
-    tf.logging.info('Original loss: {}, MRT (bleu-scaled) loss: {}'. format(original/den, new/den))
-    return original
 
   
   def _get_sentence_bleu(self, samples, targets, max_order=4):
@@ -990,6 +979,14 @@ class T2TModel(base.Layer):
     # Accumulate losses
     loss = sum(losses_dict.values())
 
+    train_loss_logger = None
+    if hparams.log_all_training_losses:
+      tf.logging.info('Adding the following loss subsets to training hooks: {}'.format(
+        losses_dict.keys()))
+      train_loss_logger = tf.train.LoggingTensorHook(losses_dict,
+                                                     every_n_iter=FLAGS.log_step_count_steps)
+
+
     # EVAL mode
     if mode == tf.estimator.ModeKeys.EVAL:
       return model.estimator_spec_eval(features, logits, labels, loss)
@@ -999,19 +996,23 @@ class T2TModel(base.Layer):
     num_async_replicas = (1 if (use_tpu or not config) else
                           config.t2t_device_info["num_async_replicas"])
     return model.estimator_spec_train(
-        loss, num_async_replicas=num_async_replicas)
+        loss, num_async_replicas=num_async_replicas, logger=train_loss_logger)
 
-  def estimator_spec_train(self, loss, num_async_replicas=1):
+  def estimator_spec_train(self, loss, num_async_replicas=1, logger=None):
     """Construct EstimatorSpec for TRAIN mode."""
     train_op = self.optimize(loss, num_async_replicas=num_async_replicas)
-
+    training_hooks = None
+    if logger is not None:
+      training_hooks = [logger]
+    
     if common_layers.is_on_tpu():
       _remove_summaries()  # summaries not currently working on TPU
       return tf.contrib.tpu.TPUEstimatorSpec(
           tf.estimator.ModeKeys.TRAIN, loss=loss, train_op=train_op)
     else:
       return tf.estimator.EstimatorSpec(
-          tf.estimator.ModeKeys.TRAIN, loss=loss, train_op=train_op)
+          tf.estimator.ModeKeys.TRAIN, loss=loss, train_op=train_op,
+        training_hooks=training_hooks)
 
   def estimator_spec_eval(self, features, logits, labels, loss):
     """Construct EstimatorSpec for EVAL mode."""

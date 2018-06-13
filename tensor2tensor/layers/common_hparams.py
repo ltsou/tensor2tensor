@@ -226,6 +226,7 @@ def basic_params1():
       mrt_log_split_loss=False,
       # whether to add MRT loss (bleu-scaled sample xentropy) to normal NMT criteria (xentropy with reference)
       mrt_add_ref_xentropy=False,
+      log_all_training_losses=False,
   )
 
 
