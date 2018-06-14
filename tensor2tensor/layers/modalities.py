@@ -162,59 +162,15 @@ class SymbolModality(modality.Modality):
               logits, body_output_shape[:-1] + [1, self._vocab_size])
 
 
-@registry.register_symbol_modality("mrt")
-class MRTSymbolModality(SymbolModality):
-  """SymbolModality that uses Minimum Risk Training"""
-  def __init__(self, *args, **kwargs):
-    super(MRTSymbolModality, self).__init__(*args, **kwargs)
-    self.bleus = None
-    self.sample_loss_norm = 1
-    self.alpha = 0.005
-
-  def get_ref_ce(self, ce, w):
-    if self.sample_loss_norm > 1:
-      tf.logging.info(ce)
-      ref_ce = ce[self.sample_loss_norm::(self.sample_loss_norm+1)]
-      tf.logging.info('Reference nll: {}'.format(sum(ref_ce) / w))
-    return ce
-
-  def loss(self, logits, targets):
-    ce, weights = common_layers.padded_cross_entropy(logits,
-                                            targets,
-                                            self._model_hparams.label_smoothing,
-                                            weights_fn=self.targets_weights_fn,
-                                            reduce_sum=False)
-
-    '''
-    target_shape = common_layers.shape_list(targets)
-    batch_size = target_shape[0]
-    timesteps = target_shape[1]
-    logits = tf.reshape(logits, [batch_size, timesteps, -1])
-    log_prob_norm = tf.reduce_logsumexp(logits, axis=2)
-    
-    ids = tf.reshape(targets, [batch_size, -1, 1])
-    batch_ids = tf.expand_dims(beam_search.compute_batch_indices(batch_size, timesteps), -1)
-    pos_ids = tf.reshape(tf.tile(tf.expand_dims(tf.range(timesteps), -1), [batch_size, 1]), 
-                         [batch_size, -1, 1])
-    gather_ids = tf.concat([batch_ids, pos_ids, ids], axis=2)
-    ce = tf.gather_nd(logits, gather_ids) - log_prob_norm # shape: [batch_size, timesteps]
-    weights = self.targets_weights_fn(tf.squeeze(targets))
-    ce = tf.reduce_sum(ce * weights, axis=1)
-    '''
-    loss_denom = tf.reduce_sum(weights)
-    if len(ce.get_shape())>1:
-      ce = tf.reduce_sum(ce, axis=1)
-      ce = tf.squeeze(ce)
-    if self.bleus is not None:
-      ce *= self.bleus * self.alpha
-      loss_denom *= self.sample_loss_norm# + 0 * t
-    return tf.reduce_sum(ce), loss_denom
-    
-  def set_bleus_and_loss_params(self, bleus, sample_count=2, alpha=0.005):
-    # needed by loss function
-    self.bleus = tf.reshape(bleus, [-1])
-    self.alpha = alpha
-    self.sample_loss_norm = sample_count - 1
+  def loss(self, top_out, targets, sum_all=True):
+      """Compute loss numerator and denominator for one shard of output."""
+      logits = top_out
+      return common_layers.padded_cross_entropy(
+          logits,
+          targets,
+          self._model_hparams.label_smoothing,
+          weights_fn=self.targets_weights_fn,
+          reduce_sum=sum_all)
     
     
 @registry.register_symbol_modality("ctc")

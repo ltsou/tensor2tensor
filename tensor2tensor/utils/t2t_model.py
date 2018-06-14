@@ -300,8 +300,11 @@ class T2TModel(base.Layer):
               tf.constant(1., dtype=tf.float32))
 
     target_modality = self._problem_hparams.target_modality
-
-    loss_num, loss_den = target_modality.loss(logits, features["targets"])
+    if self.mrt_called:
+      loss_num, loss_den = target_modality.loss(logits, features["targets"], sum_all=False)
+    else:
+      loss_num, loss_den = target_modality.loss(logits, features["targets"])
+    
     loss_num *= self._problem_hparams.loss_multiplier
     return loss_num, loss_den
 
@@ -419,13 +422,11 @@ class T2TModel(base.Layer):
     Repeat forward pass, now using samples as the 'reference' targets
     NB: this assumes that the encoded inputs have been cached and tiled by the model
     """
-    self._problem_hparams.target_modality.set_bleus_and_loss_params(bleus,
-                                                                    sample_count,
-                                                                    self.hparams.mrt_alpha)
     flat_samples = beam_search._merge_beam_dim(samples)
     flat_samples = tf.expand_dims(tf.expand_dims(flat_samples, -1), -1)
     features['targets'] = flat_samples
     logits, losses = self.model_fn(features) # shape [batch_size * sample_num]
+    losses = self.adjust_mrt_loss(losses, bleus, sample_count)
     if self.hparams.mrt_add_ref_xentropy:
       orig_loss = orig_losses['training']
       new_loss = losses['training']
@@ -433,7 +434,19 @@ class T2TModel(base.Layer):
       losses['mrt'] = new_loss
     return logits, losses
 
-  
+
+  def adjust_mrt_loss(self, losses, bleus, sample_count):
+    loss_num, loss_den = losses['training']
+    loss_den = tf.reduce_sum(loss_den)
+    if len(loss_num.get_shape())> 1:
+      loss_num = tf.reduce_sum(loss_num, axis=1)
+      loss_num = tf.squeeze(loss_num)
+    loss_num *= bleus * self.hparams.mrt_alpha
+    loss_den *= (sample_count - 1)
+    losses['training'] = (tf.reduce_sum(loss_num), loss_den)
+    return losses
+
+
   def _get_sentence_bleu(self, samples, targets, max_order=4):
     sentence_bleus = []
     for idx, sample_batch in enumerate(samples):
