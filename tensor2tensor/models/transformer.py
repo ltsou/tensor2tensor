@@ -391,7 +391,7 @@ class Transformer(t2t_model.T2TModel):
       # _shard_features called to ensure that the variable names match
       targets = self._shard_features({"targets": targets})["targets"]
       with tf.variable_scope(target_modality.name):
-        targets = target_modality.targets_bottom(targets)
+        targets = target_modality.targets_bottom_sharded(targets, dp)[0]
       targets = common_layers.flatten4d3d(targets)
 
       # TODO(llion): Explain! Is this even needed?
