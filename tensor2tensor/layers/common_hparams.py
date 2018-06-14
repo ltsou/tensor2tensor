@@ -218,7 +218,7 @@ def basic_params1():
       attention_loss_all_layers=False,
       # index (starting at 0) of layer to extract attn from if not averaging over all layers
       attention_loss_layer=0,
-      # attention loss type: currently just mse
+      # attention loss type: currently options are mse, aer
       attention_loss_type="mse",
       attention_loss_multiplier=1.0,
       # attention_length_threshold_multiplier: if >0, this factor/num of ref alignment positions

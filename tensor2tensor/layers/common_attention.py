@@ -332,7 +332,7 @@ def encoder_decoder_attention_loss(target_alignments=None,
        with shape [batch_size, target_length, source_length].
     actual_attentions: Dictionary with actual attention logits for different
       attention types and hidden layers.
-    loss_type: type of the loss function: "mse"
+    loss_type: type of the loss function: "mse", "aer"
     loss_multiplier: multiplier for the attention loss.
     attention_cutoff (float): If None, take the argmax of attentions. 
                                Otherwise, float 0.0-1.0 specifying threshold for attentions
@@ -358,10 +358,16 @@ def encoder_decoder_attention_loss(target_alignments=None,
     # [batch_size, target_length, source_length]
     return tf.reduce_mean(attentions, [0, 2])
 
-  def mse_loss(labels, attention_weights):
-    #expected_weights = tf.nn.softmax(expected_logits) # not needed?
-    return tf.losses.mean_squared_error(labels, attention_weights)
+  def mse_loss(labels, predictions):
+    tf.logging.info('Using MSE loss')
+    return tf.losses.mean_squared_error(labels, predictions)
 
+  def aer_loss(labels, predictions):
+    tf.logging.info('Using AER loss')
+    matches = tf.reduce_sum(tf.multiply(labels, predictions))
+    total_links = tf.reduce_sum(predictions) + tf.reduce_sum(labels)
+    return 1 - 2 * tf.divide(matches, total_links)
+    
 
   def get_ref_positions_and_padding(ref_aligns):
     # return 1s for the reference alignment positions, 0s otherwise
@@ -401,12 +407,17 @@ def encoder_decoder_attention_loss(target_alignments=None,
     hard_attention = get_hard_attention(soft_attention, ref_padding)
     align_shape = common_layers.shape_list(hard_attention)
     ref_aligns_sparse = tf.scatter_nd(ref_positions_flat, ref_padding, align_shape)
-    loss = loss_fn(ref_aligns_sparse, hard_attention)
-    return loss
+    return loss_fn(ref_aligns_sparse, hard_attention)
 
   if target_alignments is None:
     return 0.0
-  loss_fn = mse_loss # could add more loss functions here
+
+  loss_fn = mse_loss
+  if loss_type == "aer":
+    loss_fn = aer_loss
+  elif loss_type != "mse":
+    tf.logging.info('Warning: unknown loss type {}'.format(loss_type))
+
   soft_attentions = combine_attentions(actual_attentions)
   loss = ref_attention_loss(target_alignments, soft_attentions)
   return loss * loss_multiplier
