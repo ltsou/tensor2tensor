@@ -98,6 +98,7 @@ class EWCOptimizer(ConditionalOptimizer):
     self.fisher_accum_steps = 1
     self.set_steps(hparams)
     self.cond_name = 'ewc_cond'
+    self.ewc_ckpt = 'fisherchkpt'
 
   def set_steps(self, hparams):
     if self.save_vars:
@@ -162,6 +163,11 @@ class EWCOptimizer(ConditionalOptimizer):
     if not reader.has_tensor(sample_var_name):
       tf.logging.info('{} not found: adding EWC vars to checkpoint file'.format(
         new_vars[0].name))
+      new_var_saver = tf.train.Saver(new_vars)
+      with tf.Session() as s:
+        s.run(tf.variables_initializer(new_vars))
+        new_var_saver.save(s, ewc_checkpoint, write_state=False)
+      '''
       restorer = self.get_old_restorer(do_not_restore=new_vars)
       saver = tf.train.Saver()
       with tf.Session() as s:
@@ -169,7 +175,7 @@ class EWCOptimizer(ConditionalOptimizer):
         restorer.restore(s, checkpoint_file)
         tf.logging.info('Resaving model with EWC variables to {}'.format(ewc_checkpoint))
         saver.save(s, ewc_checkpoint)
-
+      '''
 
   def get_old_restorer(self, do_not_restore):
     # restore variables from previous checkpoint that are NOT related to EWC
