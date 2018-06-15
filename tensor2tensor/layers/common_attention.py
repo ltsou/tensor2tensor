@@ -412,7 +412,7 @@ def encoder_decoder_attention_loss(target_alignments=None,
     return loss, aer
 
   if target_alignments is None:
-    return 0.0
+    return 0.0, 0.0
 
   loss_fn = mse_loss
   if loss_type == "aer":
