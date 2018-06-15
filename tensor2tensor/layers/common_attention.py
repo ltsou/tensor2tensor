@@ -407,7 +407,9 @@ def encoder_decoder_attention_loss(target_alignments=None,
     hard_attention = get_hard_attention(soft_attention, ref_padding)
     align_shape = common_layers.shape_list(hard_attention)
     ref_aligns_sparse = tf.scatter_nd(ref_positions_flat, ref_padding, align_shape)
-    return loss_fn(ref_aligns_sparse, hard_attention)
+    aer = aer_loss(ref_aligns_sparse, hard_attention)
+    loss = loss_fn(ref_aligns_sparse, soft_attention)
+    return loss, aer
 
   if target_alignments is None:
     return 0.0
@@ -419,8 +421,8 @@ def encoder_decoder_attention_loss(target_alignments=None,
     tf.logging.info('Warning: unknown loss type {}'.format(loss_type))
 
   soft_attentions = combine_attentions(actual_attentions)
-  loss = ref_attention_loss(target_alignments, soft_attentions)
-  return loss * loss_multiplier
+  loss, aer = ref_attention_loss(target_alignments, soft_attentions)
+  return loss * loss_multiplier, aer 
 
 @expert_utils.add_name_scope()
 def get_timing_signal_1d(length,
