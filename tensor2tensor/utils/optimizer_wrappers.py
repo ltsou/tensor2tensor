@@ -21,7 +21,7 @@ from __future__ import print_function
 # Dependency imports
 
 import numpy as np
-
+import os
 from tensor2tensor.utils import yellowfin
 
 import tensorflow as tf
@@ -98,7 +98,7 @@ class EWCOptimizer(ConditionalOptimizer):
     self.fisher_accum_steps = 1
     self.set_steps(hparams)
     self.cond_name = 'ewc_cond'
-    self.ewc_ckpt = 'fisherchkpt'
+    self.ewc_checkpoint = os.path.join(self.model_dir, hparams.ewc_checkpoint)
 
   def set_steps(self, hparams):
     if self.save_vars:
@@ -133,7 +133,7 @@ class EWCOptimizer(ConditionalOptimizer):
 
   def compute_gradients(self, loss, var_list=None, **kwargs):
     tf.logging.info('Creating lagged variables for EWC loss')
-    self.create_fisher_vars()
+    #self.create_fisher_vars()
     if self.load_vars:
       loss += self.get_ewc_loss()
     return self._opt.compute_gradients(loss, var_list, **kwargs)
@@ -155,10 +155,9 @@ class EWCOptimizer(ConditionalOptimizer):
     with the needed variables, accumulation can be done on GPU.
     '''
     new_vars = tf.get_collection(self.lag_set) + tf.get_collection(self.fisher_set)
-    checkpoint_file = tf.train.latest_checkpoint(self.model_dir)
-    tf.logging.info('Checking checkpoint {} for EWC variables'.format(checkpoint_file))
-    reader = tf.train.NewCheckpointReader(checkpoint_file)
-    ewc_checkpoint = '{}_ewc'.format(checkpoint_file)
+    ewc_checkpoint = self.ewc_checkpoint
+    tf.logging.info('Checking checkpoint {} for EWC variables'.format(ewc_checkpoint))
+    reader = tf.train.NewCheckpointReader(ewc_checkpoint)
     sample_var_name = new_vars[0].name.split(':')[0]
     if not reader.has_tensor(sample_var_name):
       tf.logging.info('{} not found: adding EWC vars to checkpoint file'.format(

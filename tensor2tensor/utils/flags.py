@@ -107,6 +107,7 @@ flags.DEFINE_string("gpu_order", "", "Optional order for daisy-chaining gpus."
                     " e.g. \"1 3 2 4\"")
 flags.DEFINE_string("ps_job", "/job:ps", "name of ps job")
 flags.DEFINE_integer("ps_replicas", 0, "How many ps replicas.")
+flags.DEFINE_integer("log_step_count_steps", 100, "How frequently to output training loss.")
 
 # Decoding flags
 flags.DEFINE_string(

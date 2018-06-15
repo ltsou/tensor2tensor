@@ -221,8 +221,10 @@ def basic_params1():
       # name to group vars under EWC
       ewc_lagged_collect='EWC',
       ewc_fisher_collect='FISHER',
+      ewc_checkpoint='ewc_vars',
       #number of minibatches to use when recomputing Fisher diagonal for EWC
       ewc_fisher_accum_steps=200,
+      log_all_training_losses=False,
   )
 
 

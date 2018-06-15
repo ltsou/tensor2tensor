@@ -23,6 +23,7 @@ import contextlib
 import copy
 import math
 import time
+import os
 
 # Dependency imports
 
@@ -39,10 +40,12 @@ from tensor2tensor.utils import optimize
 from tensor2tensor.utils import registry
 
 import tensorflow as tf
-
+from tensorflow.python.training import training
 from tensorflow.python.eager import context
 from tensorflow.python.layers import base
 from tensorflow.python.ops import variable_scope
+
+FLAGS = tf.flags.FLAGS
 
 _no_problem_err_str = (
     "The default implementation of %s requires that the "
@@ -856,6 +859,44 @@ class T2TModel(base.Layer):
 
     # Accumulate losses
     loss = sum(losses_dict.values())
+    train_loss_logger = None
+    if hparams.log_all_training_losses:
+      tf.logging.info('Adding the following loss subsets to training hooks: {}'.format(
+        losses_dict.keys()))
+      train_loss_logger = tf.train.LoggingTensorHook(losses_dict,
+                                                     every_n_iter=FLAGS.log_step_count_steps)
+
+    ewc_savers = None
+    if hparams.ewc_load_vars or hparams.ewc_save_vars:
+      create_fisher_vars(hparams)
+      ewc_vars = set(tf.get_collection(hparams.ewc_lagged_collect) + 
+                     tf.get_collection(hparams.ewc_fisher_collect))
+      all_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
+      non_ewc_vars = []
+      for v in all_vars:
+        if v not in ewc_vars:
+          non_ewc_vars.append(v)
+      
+      tf.logging.info('Getting checkpoint saver hooks')
+      ewc_savers = []
+      model_dir = os.path.expanduser(FLAGS.output_dir)
+      save_secs = FLAGS.save_checkpoints_secs or None
+      save_steps = max(FLAGS.iterations_per_loop, FLAGS.local_eval_frequency)
+      non_ewc_hook = training.CheckpointSaverHook(model_dir,
+                                                  save_secs=save_secs, 
+                                                  save_steps=save_steps,
+                                                  saver=tf.train.Saver(non_ewc_vars))
+      '''
+      if hparams.ewc_save_vars:
+        ewc_hook = training.CheckpointSaverHook(model_dir,
+                                                save_secs=save_secs, 
+                                                save_steps=save_steps,
+                                                saver=tf.train.Saver(
+                                                  list(ewc_vars),
+                                                  filename=hparams.ewc_checkpoint))
+        ewc_savers.append(ewc_hook)
+      '''
+      ewc_savers.append(non_ewc_hook)
 
     # EVAL mode
     if mode == tf.estimator.ModeKeys.EVAL:
@@ -865,20 +906,29 @@ class T2TModel(base.Layer):
     assert mode == tf.estimator.ModeKeys.TRAIN
     num_async_replicas = (1 if (use_tpu or not config) else
                           config.t2t_device_info["num_async_replicas"])
-    return model.estimator_spec_train(
-        loss, num_async_replicas=num_async_replicas)
+    return model.estimator_spec_train(loss,
+                                      num_async_replicas=num_async_replicas,
+                                      logger=train_loss_logger,
+                                      ewc_savers=ewc_savers)
 
-  def estimator_spec_train(self, loss, num_async_replicas=1):
+  def estimator_spec_train(self, loss, num_async_replicas=1, logger=None, ewc_savers=None):
     """Construct EstimatorSpec for TRAIN mode."""
     train_op = self.optimize(loss, num_async_replicas=num_async_replicas)
-
+    training_hooks = []
+    if logger is not None:
+      training_hooks.append(logger)
+    if ewc_savers is not None:
+      training_hooks.extend(ewc_savers)
+    
+    tf.logging.info('USING TRAINING HOOKS: {}'.format(training_hooks))
     if common_layers.is_on_tpu():
       _remove_summaries()  # summaries not currently working on TPU
       return tf.contrib.tpu.TPUEstimatorSpec(
           tf.estimator.ModeKeys.TRAIN, loss=loss, train_op=train_op)
     else:
       return tf.estimator.EstimatorSpec(
-          tf.estimator.ModeKeys.TRAIN, loss=loss, train_op=train_op)
+          tf.estimator.ModeKeys.TRAIN, loss=loss, train_op=train_op,
+        training_hooks=training_hooks)
 
   def estimator_spec_eval(self, features, logits, labels, loss):
     """Construct EstimatorSpec for EVAL mode."""
@@ -1155,3 +1205,13 @@ def summarize_features(features, num_shards=1):
         tf.summary.scalar("%s_nonpadding_tokens" % k, nonpadding_tokens)
         tf.summary.scalar("%s_nonpadding_fraction" % k,
                           tf.reduce_mean(nonpadding))
+
+
+def create_fisher_vars(hparams):
+  for idx, var in enumerate(tf.trainable_variables()):
+    with tf.variable_scope('lagged'):
+      lagged_var = tf.Variable(tf.zeros_like(var), trainable=False)
+    with tf.variable_scope('fisher'):
+      fisher_var = tf.Variable(tf.zeros_like(var), trainable=False)
+    tf.add_to_collection(hparams.ewc_lagged_collect, lagged_var)
+    tf.add_to_collection(hparams.ewc_fisher_collect, fisher_var)
