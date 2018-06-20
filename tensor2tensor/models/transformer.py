@@ -172,7 +172,8 @@ class Transformer(t2t_model.T2TModel):
     else:
       output = body_out
       losses = {"extra": 0.0}
-    if self.alignments is not None:
+    if (self.alignments is not None and
+        self.hparams.mode == tf.estimator.ModeKeys.TRAIN):
       self.get_alignment_loss(losses)
     return output, losses
 
