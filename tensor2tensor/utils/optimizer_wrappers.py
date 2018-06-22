@@ -22,6 +22,7 @@ from __future__ import print_function
 
 import numpy as np
 import os
+import cPickle as pickle
 from tensor2tensor.utils import yellowfin
 
 import tensorflow as tf
@@ -89,16 +90,24 @@ class EWCOptimizer(ConditionalOptimizer):
     self.save_vars = hparams.ewc_save_vars
     self.ewc_loss_weight = hparams.ewc_loss_weight
     self.model_dir = hparams.model_dir
-
-    self.lag_set = hparams.ewc_lagged_collect
-    self.fisher_set = hparams.ewc_fisher_collect
-
+    self.lag_vals = []
+    self.fisher_vals = []
     self.final_step = hparams.train_steps
     self.save_ewc_step = 0
     self.fisher_accum_steps = 1
+    self.first_save_ewc_step = -1
     self.set_steps(hparams)
-    self.cond_name = 'ewc_cond'
     self.ewc_checkpoint = os.path.join(self.model_dir, hparams.ewc_checkpoint)
+    if self.load_vars:
+      self.load_ewc_vals()
+      
+  def load_ewc_vals(self):
+    with open(self.ewc_checkpoint, 'rb') as fp:
+      vals = pickle.load(fp)
+      for fisher, lag in vals:
+        self.fisher_vals.append(fisher)
+        self.lag_vals.append(lag)
+
 
   def set_steps(self, hparams):
     if self.save_vars:
@@ -108,94 +117,47 @@ class EWCOptimizer(ConditionalOptimizer):
       tf.logging.info('Then accumulate for {} steps'.format(self.fisher_accum_steps))
 
 
-  def accumulate_fisher_and_lagged(self, grads_and_vars, global_step, name):
-    fisher_vars = tf.get_collection(self.fisher_set)
-    lagged_vars = tf.get_collection(self.lag_set)
-    ewc_ops = [global_step.assign_add(1)]
-    scale = 1.0 / self.fisher_accum_steps
-    for grad_var_pair, f, l in zip(grads_and_vars, fisher_vars, lagged_vars):
-      grad, var = grad_var_pair
-      ewc_ops.append(f.assign_add(tf.square(grad) * scale))
-      ewc_ops.append(l.assign(var))
+  def update_ewc_vals(self, *grads_vars_and_step):
+    global_step = grads_vars_and_step[-1]
+    if self.first_save_ewc_step < 0:
+      self.first_save_ewc_step = global_step
+    last_step = (global_step >= self.first_save_ewc_step + self.fisher_accum_steps - 1)
+    for idx, grad_var_pair in enumerate(grads_vars_and_step[:-1]):
+      fisher_val = grad_var_pair[0] / self.fisher_accum_steps
+      if idx <= len(self.fisher_vals):
+        self.fisher_vals.append(fisher_val)
+      else:
+        self.fisher_vals[idx] += fisher_val
+      if last_step:
+        self.lag_vals.append(grad_var_pair[1])
+    if last_step:
+      tf.logging.info('Last step of accumulation: pickling EWC variables')
+      with open(self.ewc_checkpoint, 'wb') as fp:
+        pickle.dump(zip(self.fisher_vals, self.lag_vals), fp)
+    return 1
+    
+  def accumulate_ewc(self, grads_and_vars, global_step, name):
+    step = tf.py_func(self.update_ewc_vals, grads_and_vars + [global_step], tf.int64)
+    ewc_ops = [global_step.assign_add(step)]
     return control_flow_ops.group(*ewc_ops)
-      
 
   def apply_gradients(self, grads_and_vars, global_step=None, name=None):
-      maybe_accumulate_fisher = tf.cond(tf.logical_and(
-        tf.constant(self.save_vars, dtype=tf.bool),
-        tf.greater_equal(global_step, self.save_ewc_step)),
-                                        lambda: self.accumulate_fisher_and_lagged(
-                                          grads_and_vars, global_step=global_step, name=name),
-                                        lambda: self._opt.apply_gradients(
-                                          grads_and_vars, global_step=global_step, name=name),
-                                        name=self.cond_name)
-      return maybe_accumulate_fisher
+    fisher_cond = tf.logical_and(tf.constant(self.save_vars, dtype=tf.bool),
+                                 tf.greater_equal(global_step, self.save_ewc_step))
+    maybe_accumulate_fisher = tf.cond(fisher_cond,
+      lambda: self.accumulate_ewc(grads_and_vars, global_step, name=name),
+      lambda: self._opt.apply_gradients(grads_and_vars, global_step, name=name),
+      name=name)
+    return maybe_accumulate_fisher
 
   def compute_gradients(self, loss, var_list=None, **kwargs):
-    tf.logging.info('Creating lagged variables for EWC loss')
-    #self.create_fisher_vars()
     if self.load_vars:
       loss += self.get_ewc_loss()
     return self._opt.compute_gradients(loss, var_list, **kwargs)
 
-  def create_fisher_vars(self):
-    for idx, var in enumerate(tf.trainable_variables()):
-      with tf.variable_scope('lagged'):
-        lagged_var = tf.Variable(tf.zeros_like(var), trainable=False)
-      with tf.variable_scope('fisher'):
-        fisher_var = tf.Variable(tf.zeros_like(var), trainable=False)
-      tf.add_to_collection(self.lag_set, lagged_var)
-      tf.add_to_collection(self.fisher_set, fisher_var)
-
-
-  def check_checkpoint_vars(self):
-    '''May be saving EWC variables to a model previously trained without them
-    if so, need to add EWC vars to the checkpoint: this is a hacky way to do so.
-    For some reason this has to be done on CPU, but once we have a checkpoint 
-    with the needed variables, accumulation can be done on GPU.
-    '''
-    new_vars = tf.get_collection(self.lag_set) + tf.get_collection(self.fisher_set)
-    ewc_checkpoint = self.ewc_checkpoint
-    tf.logging.info('Checking checkpoint {} for EWC variables'.format(ewc_checkpoint))
-    reader = tf.train.NewCheckpointReader(ewc_checkpoint)
-    sample_var_name = new_vars[0].name.split(':')[0]
-    if not reader.has_tensor(sample_var_name):
-      tf.logging.info('{} not found: adding EWC vars to checkpoint file'.format(
-        new_vars[0].name))
-      new_var_saver = tf.train.Saver(new_vars)
-      with tf.Session() as s:
-        s.run(tf.variables_initializer(new_vars))
-        new_var_saver.save(s, ewc_checkpoint, write_state=False)
-      '''
-      restorer = self.get_old_restorer(do_not_restore=new_vars)
-      saver = tf.train.Saver()
-      with tf.Session() as s:
-        s.run(tf.variables_initializer(new_vars))
-        restorer.restore(s, checkpoint_file)
-        tf.logging.info('Resaving model with EWC variables to {}'.format(ewc_checkpoint))
-        saver.save(s, ewc_checkpoint)
-      '''
-
-  def get_old_restorer(self, do_not_restore):
-    # restore variables from previous checkpoint that are NOT related to EWC
-    global_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
-    restore_ignore_set = set(do_not_restore)
-    restore_vars = []
-    for v in global_vars:
-      if v not in restore_ignore_set:
-        if self.cond_name not in v.name: # resets Adam-specific beta_power variables
-          restore_vars.append(v)
-        else:
-          do_not_restore.append(v)
-    return tf.train.Saver(restore_vars)
-      
-
   def get_ewc_loss(self):
     tf.logging.info('Adding EWC penalty to loss with lambda {}'.format(self.ewc_loss_weight))
-    lagged_vars = tf.get_collection(self.lag_set)
-    fisher_vars = tf.get_collection(self.fisher_set)
     penalty = tf.add_n([tf.reduce_sum(tf.square(l - t) * f)
-                        for l, t, f in zip(
-                            lagged_vars, tf.trainable_variables(), fisher_vars)])
+      for l, t, f in zip(self.lag_vals, tf.trainable_variables(), self.fisher_vals)])
     ewc_loss = self.ewc_loss_weight * penalty
     return ewc_loss
