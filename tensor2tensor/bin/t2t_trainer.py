@@ -246,7 +246,6 @@ def maybe_cloud_tpu():
                      "be gs:// paths, i.e. on Google Cloud Storage.")
 
   FLAGS.use_tpu = True
-
   with cloud.cloud_tpu(
       FLAGS.cloud_vm_name,
       FLAGS.cloud_tpu_name,

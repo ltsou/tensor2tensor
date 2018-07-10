@@ -93,9 +93,6 @@ class EWCOptimizer(ConditionalOptimizer):
     self.model_dir = hparams.model_dir
     self.lag_vals = []
     self.fisher_vals = []
-    self.is_adam = False
-    if 'Adam' in optimizer_name:
-      self.is_adam = True
 
     self.final_step = hparams.train_steps
     self.save_ewc_step = 0
