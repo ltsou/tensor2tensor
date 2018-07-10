@@ -150,8 +150,7 @@ def create_run_config(hp):
       worker_id=FLAGS.worker_id,
       worker_job=FLAGS.worker_job,
       random_seed=FLAGS.random_seed,
-      tpu_infeed_sleep_secs=FLAGS.tpu_infeed_sleep_secs,
-      log_step_count_steps=FLAGS.log_step_count_steps,)
+      tpu_infeed_sleep_secs=FLAGS.tpu_infeed_sleep_secs)
 
 
 def generate_data():
@@ -246,7 +245,6 @@ def maybe_cloud_tpu():
                      "be gs:// paths, i.e. on Google Cloud Storage.")
 
   FLAGS.use_tpu = True
-
   with cloud.cloud_tpu(
       FLAGS.cloud_vm_name,
       FLAGS.cloud_tpu_name,
