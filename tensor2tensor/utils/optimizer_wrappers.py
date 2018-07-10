@@ -22,6 +22,7 @@ from __future__ import print_function
 
 import numpy as np
 import os
+import sys
 import cPickle as pickle
 from tensor2tensor.utils import yellowfin
 
@@ -92,6 +93,10 @@ class EWCOptimizer(ConditionalOptimizer):
     self.model_dir = hparams.model_dir
     self.lag_vals = []
     self.fisher_vals = []
+    self.is_adam = False
+    if 'Adam' in optimizer_name:
+      self.is_adam = True
+
     self.final_step = hparams.train_steps
     self.save_ewc_step = 0
     self.fisher_accum_steps = 1
@@ -137,23 +142,24 @@ class EWCOptimizer(ConditionalOptimizer):
     return 1
     
   def accumulate_ewc(self, grads_and_vars, global_step, name):
+    updates_to_ignore = self._opt.apply_gradients(grads_and_vars, global_step, name)
+    
     step = tf.py_func(self.update_ewc_vals, grads_and_vars + [global_step], tf.int64)
     ewc_ops = [global_step.assign_add(step)]
     return control_flow_ops.group(*ewc_ops)
+    
 
   def apply_gradients(self, grads_and_vars, global_step=None, name=None):
+    v_list = [v for (_, v) in grads_and_vars]
+    self._opt._create_slots(v_list)
     fisher_cond = tf.logical_and(tf.constant(self.save_vars, dtype=tf.bool),
                                  tf.greater_equal(global_step, self.save_ewc_step))
     maybe_accumulate_fisher = tf.cond(fisher_cond,
-      lambda: self.accumulate_ewc(grads_and_vars, global_step, name=name),
-      lambda: self._opt.apply_gradients(grads_and_vars, global_step, name=name),
+                                      lambda: self.accumulate_ewc(grads_and_vars, global_step, name=name),
+                                      lambda: self._opt.apply_gradients(grads_and_vars, global_step, name=name),
       name=name)
     return maybe_accumulate_fisher
 
-  def compute_gradients(self, loss, var_list=None, **kwargs):
-    if self.load_vars:
-      loss += self.get_ewc_loss()
-    return self._opt.compute_gradients(loss, var_list, **kwargs)
 
   def get_ewc_loss(self):
     tf.logging.info('Adding EWC penalty to loss with lambda {}'.format(self.ewc_loss_weight))

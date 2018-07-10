@@ -45,6 +45,8 @@ def optimize(loss, learning_rate, hparams, use_tpu=False):
       diet_vars, "Diet Variables", verbose=hparams.summarize_vars)
   if hparams.ewc_save_vars or hparams.ewc_load_vars:
     opt = EWCOptimizer(hparams.optimizer, learning_rate, hparams, use_tpu)
+    if hparams.ewc_load_vars:
+      loss += opt.get_ewc_loss()
   else:
     opt = ConditionalOptimizer(hparams.optimizer, learning_rate, hparams, use_tpu)
   if use_tpu:
