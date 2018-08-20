@@ -136,6 +136,7 @@ class EWCOptimizer(ConditionalOptimizer):
       tf.logging.info('Last step of accumulation: pickling EWC variables')
       with open(self.ewc_checkpoint, 'wb') as fp:
         pickle.dump(zip(self.fisher_vals, self.lag_vals), fp)
+      sys.exit('Saved EWC vars, exiting')
     return 1
     
   def accumulate_ewc(self, grads_and_vars, global_step, name):
