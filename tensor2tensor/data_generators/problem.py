@@ -516,26 +516,20 @@ class Problem(object):
         "partition: %d num_data_files: %d" % (partition_id, len(data_files)))
     if shuffle_files:
       random.shuffle(data_files)
-    '''
-    #VERSIONING
+
     dataset = tf.data.Dataset.from_tensor_slices(tf.constant(data_files))
     dataset = dataset.apply(
         tf.contrib.data.parallel_interleave(
             _load_records, sloppy=is_training, cycle_length=8))
-    '''
-    dataset = tf.data.Dataset.from_tensor_slices(
-      tf.constant(data_files)).interleave(_load_records, cycle_length=8)
     if repeat:
       dataset = dataset.repeat()
     dataset = dataset.map(self.decode_example, num_parallel_calls=num_threads)
     if preprocess:
-      '''
-      #VERSIONING
       dataset = dataset.apply(
           tf.contrib.data.parallel_interleave(
               _preprocess, sloppy=is_training, cycle_length=8))
-      '''
-      dataset = dataset.interleave(_preprocess, cycle_length=8)
+
+
     dataset = dataset.map(
         _maybe_reverse_and_copy, num_parallel_calls=num_threads)
 
